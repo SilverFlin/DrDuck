@@ -1,0 +1,7 @@
+ai_provider: claude-code
+doc_storage: same-repo
+adr_template: madr
+hooks:
+    pre_commit: true
+    pre_push: true
+doc_path: docs/adrs

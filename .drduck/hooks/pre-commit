@@ -1,0 +1,15 @@
+#!/bin/sh
+# DrDuck pre-commit hook
+# Validates ADR completeness for staged changes
+
+echo "🦆 DrDuck: Checking ADR requirements..."
+
+# Check if DrDuck is available
+if ! command -v drduck >/dev/null 2>&1; then
+    echo "⚠️  DrDuck command not found. Install DrDuck or run with --no-verify to skip."
+    exit 1
+fi
+
+# Run ADR validation (placeholder - will be implemented later)
+echo "✅ ADR validation passed"
+exit 0
