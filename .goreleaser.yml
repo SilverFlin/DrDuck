@@ -42,10 +42,7 @@ builds:
 
 # Archive configuration
 archives:
-  - id: drduck
-    format_overrides:
-      - goos: windows
-        format: zip
+  - id: default
     # Archive name template
     name_template: >-
       {{ .ProjectName }}_
@@ -58,6 +55,7 @@ archives:
     files:
       - README.md
       - LICENSE
+    # GoReleaser v2 auto-detects format: tar.gz for Unix, zip for Windows
 
 # Checksum configuration
 checksum:
@@ -135,52 +133,6 @@ release:
     
     ---
     **Full Changelog**: https://github.com/SilverFlin/DrDuck/compare/{{ .PreviousTag }}...{{ .Tag }}
-
-# Homebrew formula  
-brews:
-  - repository:
-      owner: SilverFlin
-      name: homebrew-tap
-      branch: main
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    url_template: "https://github.com/SilverFlin/DrDuck/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
-    download_strategy: CurlDownloadStrategy
-    commit_author:
-      name: goreleaserbot
-      email: bot@goreleaser.com
-    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
-    directory: Formula
-    homepage: "https://github.com/SilverFlin/DrDuck"
-    description: "DocOps CLI tool for automated documentation workflows with AI integration"
-    license: "MIT"
-    skip_upload: auto
-    dependencies:
-      - name: git
-        type: optional
-    test: |
-      system "#{bin}/drduck --version"
-    install: |
-      bin.install "drduck"
-      
-      # Install shell completions
-      generate_completions_from_executable(bin/"drduck", "completion")
-
-# Scoop manifest for Windows
-scoops:
-  - repository:
-      owner: SilverFlin
-      name: scoop-bucket
-      branch: main
-      token: "{{ .Env.SCOOP_GITHUB_TOKEN }}"
-    url_template: "https://github.com/SilverFlin/DrDuck/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
-    commit_author:
-      name: goreleaserbot
-      email: bot@goreleaser.com
-    commit_msg_template: "Scoop update for {{ .ProjectName }} version {{ .Tag }}"
-    homepage: "https://github.com/SilverFlin/DrDuck"
-    description: "DocOps CLI tool for automated documentation workflows with AI integration"
-    license: MIT
-    skip_upload: auto
 
 # Snapcraft for Linux (optional - uncomment if you want Snap packages)
 # snapcrafts:
