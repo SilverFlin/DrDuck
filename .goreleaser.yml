@@ -1,0 +1,209 @@
+# GoReleaser configuration for DrDuck
+# Make sure to check the documentation at https://goreleaser.com
+
+# Configuration version
+version: 2
+
+# Basic project information
+project_name: drduck
+
+# Before hooks - run before building
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+# Build configuration
+builds:
+  - id: drduck
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - "386"
+      - amd64
+      - arm
+      - arm64
+    ignore:
+      - goos: darwin
+        goarch: "386"
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+    binary: drduck
+
+# Archive configuration
+archives:
+  - id: drduck
+    format_overrides:
+      - goos: windows
+        format: zip
+    # Archive name template
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    # Files to include in archive
+    files:
+      - README.md
+      - LICENSE
+
+# Checksum configuration
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# Snapshot configuration (for unreleased versions)
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# Changelog configuration
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^test:"
+      - "^chore"
+      - "merge conflict"
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+      - go mod tidy
+  groups:
+    - title: "New Features"
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: "Security updates"
+      regexp: '^.*?sec(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: "Bug fixes"
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: "Documentation updates"
+      regexp: ^.*?docs?(\([[:word:]]+\))??!?:.+$
+      order: 3
+    - title: "Build process updates"
+      regexp: ^.*?build(\([[:word:]]+\))??!?:.+$
+      order: 4
+    - title: "Other work"
+      order: 999
+
+# GitHub release configuration
+release:
+  github:
+    owner: SilverFlin
+    name: DrDuck
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## DrDuck {{ .Tag }} 🦆
+    
+    Welcome to this new release of DrDuck! 
+    
+    ### What's DrDuck?
+    DrDuck is a DocOps CLI tool that integrates with AI coding assistants (Claude Code CLI, Cursor) to automate the creation and management of Architectural Decision Records (ADRs).
+    
+  footer: |
+    ## Installation
+    
+    ### Homebrew
+    ```bash
+    brew install silverflin/tap/drduck
+    ```
+    
+    ### Scoop (Windows)
+    ```bash
+    scoop bucket add silverflin https://github.com/SilverFlin/scoop-bucket.git
+    scoop install drduck
+    ```
+    
+    ### Manual Installation
+    Download the appropriate binary for your platform from the assets below.
+    
+    ---
+    **Full Changelog**: https://github.com/SilverFlin/DrDuck/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+# Homebrew formula  
+brews:
+  - repository:
+      owner: SilverFlin
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    url_template: "https://github.com/SilverFlin/DrDuck/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    download_strategy: CurlDownloadStrategy
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
+    directory: Formula
+    homepage: "https://github.com/SilverFlin/DrDuck"
+    description: "DocOps CLI tool for automated documentation workflows with AI integration"
+    license: "MIT"
+    skip_upload: auto
+    dependencies:
+      - name: git
+        type: optional
+    test: |
+      system "#{bin}/drduck --version"
+    install: |
+      bin.install "drduck"
+      
+      # Install shell completions
+      generate_completions_from_executable(bin/"drduck", "completion")
+
+# Scoop manifest for Windows
+scoops:
+  - repository:
+      owner: SilverFlin
+      name: scoop-bucket
+      branch: main
+      token: "{{ .Env.SCOOP_GITHUB_TOKEN }}"
+    url_template: "https://github.com/SilverFlin/DrDuck/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "Scoop update for {{ .ProjectName }} version {{ .Tag }}"
+    homepage: "https://github.com/SilverFlin/DrDuck"
+    description: "DocOps CLI tool for automated documentation workflows with AI integration"
+    license: MIT
+    skip_upload: auto
+
+# Snapcraft for Linux (optional - uncomment if you want Snap packages)
+# snapcrafts:
+#   - id: drduck
+#     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+#     summary: DocOps CLI tool for automated documentation workflows
+#     description: |
+#       DrDuck is a CLI tool that integrates with AI coding assistants (Claude Code CLI, Cursor) 
+#       to automate the creation and management of Architectural Decision Records (ADRs) and other 
+#       documentation following DocOps principles.
+#     grade: stable
+#     confinement: strict
+#     publish: true
+#     license: MIT
+#     base: core22
+#     apps:
+#       drduck:
+#         command: drduck
+#         plugs: ["home", "network"]
+
+# Generate shell completions
+# Note: Shell completions are handled by Homebrew formula
+
+# Universal binaries for macOS (combine Intel and ARM)
+universal_binaries:
+  - replace: true
