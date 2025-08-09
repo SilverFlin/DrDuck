@@ -18,13 +18,14 @@ DrDuck is a command-line tool that integrates with AI coding assistants (Claude 
 ### Installation
 
 ```bash
-# Install from source (Go 1.21+ required)
+# Go install (recommended - any platform with Go)
 go install github.com/SilverFlin/DrDuck@latest
 
-# Or clone and build
-git clone https://github.com/SilverFlin/DrDuck.git
-cd DrDuck
-go build -o drduck main.go
+# Or install specific version
+go install github.com/SilverFlin/DrDuck@v0.1.0
+
+# Manual download (all platforms)
+# Download from: https://github.com/SilverFlin/DrDuck/releases
 ```
 
 ### Initialize a Project
