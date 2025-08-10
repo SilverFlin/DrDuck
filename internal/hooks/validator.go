@@ -179,8 +179,17 @@ func (v *Validator) ValidatePrePush() *ValidationResult {
 		return result
 	}
 
-	// All good!
-	result.Message = "🦆 DrDuck: All checks passed! ✨ Push proceeding..."
+	// All good! Show AI analysis even when no ADR needed
+	var messageBuilder strings.Builder
+	messageBuilder.WriteString("🦆 DrDuck: All checks passed! ✨\n\n")
+	if aiResponse != "" {
+		messageBuilder.WriteString("🤖 Dr Duck's Analysis:\n")
+		messageBuilder.WriteString(aiResponse)
+		messageBuilder.WriteString("\n\n")
+	}
+	messageBuilder.WriteString("✅ Push proceeding...")
+	
+	result.Message = messageBuilder.String()
 	return result
 }
 
