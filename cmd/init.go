@@ -280,18 +280,23 @@ func setupGitHooks(cfg *config.Config) error {
 	if cfg.Hooks.PreCommit {
 		preCommitHook := `#!/bin/sh
 # DrDuck pre-commit hook
-# Validates ADR completeness for staged changes
+# Encourages ADR completion but never blocks commits
 
-echo "🦆 DrDuck: Checking ADR requirements..."
+echo "🦆 DrDuck: Checking for draft ADRs..."
 
 # Check if DrDuck is available
 if ! command -v drduck >/dev/null 2>&1; then
-    echo "⚠️  DrDuck command not found. Install DrDuck or run with --no-verify to skip."
-    exit 1
+    echo "⚠️  DrDuck command not found, but continuing with commit..."
+    echo "   Install DrDuck globally: npm install -g drduck"
+    exit 0
 fi
 
-# Run ADR validation (placeholder - will be implemented later)
-echo "✅ ADR validation passed"
+# Run pre-commit validation (warns but never blocks)
+if ! drduck validate --pre-commit 2>/dev/null; then
+    echo "⚠️  DrDuck validation had issues, but commit proceeding..."
+fi
+
+# Always exit successfully - pre-commit never blocks
 exit 0
 `
 		hookPath := filepath.Join(hooksDir, "pre-commit")
@@ -322,18 +327,27 @@ exit 0
 	if cfg.Hooks.PrePush {
 		prePushHook := `#!/bin/sh
 # DrDuck pre-push hook
-# Ensures significant changes have associated ADRs
+# Blocks push if draft ADRs exist or if changes need ADRs
 
-echo "🦆 DrDuck: Checking ADR requirements for push..."
+echo "🦆 DrDuck: Validating ADR requirements before push..."
 
 # Check if DrDuck is available
 if ! command -v drduck >/dev/null 2>&1; then
-    echo "⚠️  DrDuck command not found. Install DrDuck or run with --no-verify to skip."
+    echo "⚠️  DrDuck command not found. Install DrDuck or use --no-verify to skip."
+    echo "   Install: npm install -g drduck"
     exit 1
 fi
 
-# Run ADR validation (placeholder - will be implemented later)
-echo "✅ ADR validation passed"
+# Run pre-push validation (may block)
+if ! drduck validate --pre-push; then
+    echo ""
+    echo "💡 To bypass this check: git push --no-verify"
+    echo "🔗 For help: drduck --help"
+    exit 1
+fi
+
+# Validation passed
+echo "✅ All ADR requirements satisfied!"
 exit 0
 `
 		hookPath := filepath.Join(hooksDir, "pre-push")

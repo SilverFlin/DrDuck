@@ -9,17 +9,26 @@ import (
 )
 
 type Config struct {
-	AIProvider      string     `yaml:"ai_provider"`
-	DocStorage      string     `yaml:"doc_storage"`
-	ADRTemplate     string     `yaml:"adr_template"`
-	Hooks           HooksConfig `yaml:"hooks"`
-	DocPath         string     `yaml:"doc_path"`
-	SeparateRepoURL string     `yaml:"separate_repo_url,omitempty"`
+	AIProvider      string       `yaml:"ai_provider"`
+	DocStorage      string       `yaml:"doc_storage"`
+	ADRTemplate     string       `yaml:"adr_template"`
+	Hooks           HooksConfig  `yaml:"hooks"`
+	DocPath         string       `yaml:"doc_path"`
+	SeparateRepoURL string       `yaml:"separate_repo_url,omitempty"`
+	AISettings      AISettings   `yaml:"ai_settings"`
 }
 
 type HooksConfig struct {
 	PreCommit bool `yaml:"pre_commit"`
 	PrePush   bool `yaml:"pre_push"`
+}
+
+type AISettings struct {
+	Persona           string   `yaml:"persona"`
+	Sensitivity       string   `yaml:"sensitivity"`
+	IgnorePatterns    []string `yaml:"ignore_patterns,omitempty"`
+	RequireADRFor     []string `yaml:"require_adr_for,omitempty"`
+	NeverRequireADRFor []string `yaml:"never_require_adr_for,omitempty"`
 }
 
 const (
@@ -39,6 +48,34 @@ func DefaultConfig() *Config {
 			PrePush:   false,
 		},
 		DocPath: DefaultDocPath,
+		AISettings: AISettings{
+			Persona:     "drduck",
+			Sensitivity: "moderate",
+			IgnorePatterns: []string{
+				"*.md",
+				"*.txt", 
+				"docs/*",
+				"README*",
+				"test/*",
+				"tests/*",
+				"*_test.go",
+				"*.test.*",
+			},
+			RequireADRFor: []string{
+				"database",
+				"architecture",
+				"api design",
+				"security",
+				"performance",
+			},
+			NeverRequireADRFor: []string{
+				"typo",
+				"formatting", 
+				"comment",
+				"log message",
+				"debug",
+			},
+		},
 	}
 }
 

@@ -14,6 +14,7 @@ type Provider interface {
 	GetChangedFiles() ([]string, error)
 	SuggestADRContent(adrName string) (map[string]string, error)
 	ExtractContext() (string, error)
+	AnalyzeChanges(prompt string) (string, error)
 }
 
 // Manager handles AI provider integration
@@ -67,6 +68,11 @@ func (m *Manager) ExtractContext() (string, error) {
 	return m.provider.ExtractContext()
 }
 
+// AnalyzeChanges sends a change analysis prompt to the AI provider
+func (m *Manager) AnalyzeChanges(prompt string) (string, error) {
+	return m.provider.AnalyzeChanges(prompt)
+}
+
 // ClaudeProvider implements Provider for Claude Code CLI
 type ClaudeProvider struct {
 	integration *claude.Integration
@@ -93,6 +99,10 @@ func (p *ClaudeProvider) ExtractContext() (string, error) {
 	return p.integration.ExtractContext(session)
 }
 
+func (p *ClaudeProvider) AnalyzeChanges(prompt string) (string, error) {
+	return p.integration.AnalyzeChanges(prompt)
+}
+
 // CursorProvider implements Provider for Cursor
 type CursorProvider struct {
 	integration *cursor.Integration
@@ -117,4 +127,8 @@ func (p *CursorProvider) ExtractContext() (string, error) {
 	}
 
 	return p.integration.ExtractContext(session)
+}
+
+func (p *CursorProvider) AnalyzeChanges(prompt string) (string, error) {
+	return p.integration.AnalyzeChanges(prompt)
 }

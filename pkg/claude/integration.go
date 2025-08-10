@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // ClaudeSession represents information about a Claude Code CLI session
@@ -126,4 +127,130 @@ func (i *Integration) WatchForChanges() error {
 	// TODO: Implement file system watching
 	// This would monitor Claude's session files and trigger ADR updates
 	return fmt.Errorf("not implemented: change watching is planned for future releases")
+}
+
+// AnalyzeChanges sends a prompt to Claude for change analysis
+func (i *Integration) AnalyzeChanges(prompt string) (string, error) {
+	if !i.IsAvailable() {
+		return "", fmt.Errorf("claude command not available")
+	}
+
+	// Use claude command with --print flag for non-interactive analysis
+	cmd := exec.Command("claude", "--print", prompt)
+	
+	output, err := cmd.Output()
+	if err != nil {
+		// If direct command fails, provide a fallback analysis
+		return i.fallbackAnalysis(prompt)
+	}
+
+	response := strings.TrimSpace(string(output))
+	if response == "" {
+		return i.fallbackAnalysis(prompt)
+	}
+
+	return response, nil
+}
+
+// fallbackAnalysis provides basic heuristic analysis when AI is unavailable
+func (i *Integration) fallbackAnalysis(prompt string) (string, error) {
+	// Extract changes from the prompt for basic analysis
+	changes := i.extractChangesFromPrompt(prompt)
+	
+	// Basic heuristics for architectural decisions
+	architecturalKeywords := []string{
+		"database", "api", "framework", "architecture", "design pattern",
+		"authentication", "authorization", "security", "performance",
+		"integration", "microservice", "monolith", "deployment",
+		"technology stack", "library", "dependency", "configuration",
+	}
+	
+	uiKeywords := []string{
+		"css", "style", "ui", "frontend", "button", "color", "theme",
+		"layout", "responsive", "animation", "visual", "design system",
+	}
+	
+	bugfixKeywords := []string{
+		"fix", "bug", "error", "issue", "typo", "hotfix",
+		"patch", "correction", "debug",
+	}
+	
+	changes = strings.ToLower(changes)
+	
+	// Check for bug fixes first (lowest priority)
+	for _, keyword := range bugfixKeywords {
+		if strings.Contains(changes, keyword) {
+			return `**Decision**: No
+**Reasoning**: Changes appear to be bug fixes or patches, which typically don't require architectural documentation
+**Suggested ADR Title**: N/A
+**Key Points**: N/A`, nil
+		}
+	}
+	
+	// Check for UI-only changes
+	uiScore := 0
+	for _, keyword := range uiKeywords {
+		if strings.Contains(changes, keyword) {
+			uiScore++
+		}
+	}
+	
+	// Check for architectural changes
+	archScore := 0
+	for _, keyword := range architecturalKeywords {
+		if strings.Contains(changes, keyword) {
+			archScore++
+		}
+	}
+	
+	// Decision logic
+	if archScore > 0 {
+		return `**Decision**: Yes
+**Reasoning**: Changes contain architectural keywords suggesting significant system decisions that should be documented
+**Suggested ADR Title**: document-recent-architectural-changes
+**Key Points**: 
+- Document the architectural decision and its rationale
+- Consider long-term implications and alternatives
+- Ensure team alignment on the approach`, nil
+	}
+	
+	if uiScore > 2 && archScore == 0 {
+		return `**Decision**: No
+**Reasoning**: Changes appear to be primarily UI/styling updates without architectural implications
+**Suggested ADR Title**: N/A
+**Key Points**: N/A`, nil
+	}
+	
+	// Default to requiring ADR for safety when uncertain
+	return `**Decision**: Yes
+**Reasoning**: Unable to definitively categorize changes - recommending ADR for safety and team communication
+**Suggested ADR Title**: document-recent-changes
+**Key Points**: 
+- Review and document the purpose of these changes
+- Consider if they establish new patterns or approaches
+- Ensure team understanding and alignment`, nil
+}
+
+// extractChangesFromPrompt extracts the actual code changes from the analysis prompt
+func (i *Integration) extractChangesFromPrompt(prompt string) string {
+	lines := strings.Split(prompt, "\n")
+	inChangesSection := false
+	var changes []string
+	
+	for _, line := range lines {
+		if strings.Contains(line, "## Code Changes to Analyze") {
+			inChangesSection = true
+			continue
+		}
+		if inChangesSection {
+			if strings.HasPrefix(line, "##") && !strings.Contains(line, "Code Changes") {
+				break
+			}
+			if !strings.HasPrefix(line, "```") {
+				changes = append(changes, line)
+			}
+		}
+	}
+	
+	return strings.Join(changes, "\n")
 }

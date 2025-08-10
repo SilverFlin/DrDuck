@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // CursorSession represents information about a Cursor AI session
@@ -145,4 +146,158 @@ func (i *Integration) WatchForChanges() error {
 	// - Code changes through AI assistance
 	// - Project modifications via Cursor AI
 	return fmt.Errorf("not implemented: change monitoring is planned for future releases")
+}
+
+// AnalyzeChanges sends a prompt to Cursor for change analysis
+func (i *Integration) AnalyzeChanges(prompt string) (string, error) {
+	if !i.IsAvailable() {
+		return "", fmt.Errorf("cursor not available")
+	}
+
+	// Try to use Cursor's AI capabilities for analysis
+	// This is a basic implementation - Cursor doesn't have a direct CLI for prompts like Claude
+	// We'll provide a fallback analysis similar to Claude's implementation
+	
+	return i.fallbackAnalysis(prompt)
+}
+
+// fallbackAnalysis provides basic heuristic analysis when AI is unavailable
+func (i *Integration) fallbackAnalysis(prompt string) (string, error) {
+	// Extract changes from the prompt for basic analysis
+	changes := i.extractChangesFromPrompt(prompt)
+	
+	// Basic heuristics for architectural decisions (similar to Claude implementation)
+	architecturalKeywords := []string{
+		"database", "api", "framework", "architecture", "design pattern",
+		"authentication", "authorization", "security", "performance",
+		"integration", "microservice", "monolith", "deployment",
+		"technology stack", "library", "dependency", "configuration",
+		"schema", "migration", "service", "interface",
+	}
+	
+	uiKeywords := []string{
+		"css", "style", "ui", "frontend", "button", "color", "theme",
+		"layout", "responsive", "animation", "visual", "design system",
+		"component", "react", "vue", "angular",
+	}
+	
+	bugfixKeywords := []string{
+		"fix", "bug", "error", "issue", "typo", "hotfix",
+		"patch", "correction", "debug", "resolve",
+	}
+	
+	testKeywords := []string{
+		"test", "spec", "unittest", "integration test", "e2e",
+		"coverage", "mock", "stub", "assert",
+	}
+	
+	changes = strings.ToLower(changes)
+	
+	// Check for bug fixes first (lowest priority)
+	bugScore := 0
+	for _, keyword := range bugfixKeywords {
+		if strings.Contains(changes, keyword) {
+			bugScore++
+		}
+	}
+	
+	if bugScore > 0 {
+		return `**Decision**: No
+**Reasoning**: Changes appear to be bug fixes or patches, which typically don't require architectural documentation
+**Suggested ADR Title**: N/A
+**Key Points**: N/A`, nil
+	}
+	
+	// Check for test-only changes
+	testScore := 0
+	for _, keyword := range testKeywords {
+		if strings.Contains(changes, keyword) {
+			testScore++
+		}
+	}
+	
+	// Check for UI-only changes
+	uiScore := 0
+	for _, keyword := range uiKeywords {
+		if strings.Contains(changes, keyword) {
+			uiScore++
+		}
+	}
+	
+	// Check for architectural changes
+	archScore := 0
+	for _, keyword := range architecturalKeywords {
+		if strings.Contains(changes, keyword) {
+			archScore++
+		}
+	}
+	
+	// Decision logic
+	if archScore >= 2 {
+		return `**Decision**: Yes
+**Reasoning**: Changes contain multiple architectural indicators suggesting significant system decisions that should be documented
+**Suggested ADR Title**: document-recent-architectural-changes
+**Key Points**: 
+- Document the architectural decision and its rationale
+- Consider long-term implications and alternatives
+- Ensure team alignment on the approach`, nil
+	}
+	
+	if testScore > 1 && archScore == 0 && uiScore == 0 {
+		return `**Decision**: No
+**Reasoning**: Changes appear to be primarily test-related improvements without architectural implications
+**Suggested ADR Title**: N/A
+**Key Points**: N/A`, nil
+	}
+	
+	if uiScore > 2 && archScore == 0 {
+		return `**Decision**: No
+**Reasoning**: Changes appear to be primarily UI/styling updates without architectural implications
+**Suggested ADR Title**: N/A
+**Key Points**: N/A`, nil
+	}
+	
+	// If we detect one architectural keyword, be cautious but recommend ADR
+	if archScore == 1 {
+		return `**Decision**: Yes
+**Reasoning**: Changes touch architectural components - recommending ADR to ensure proper documentation and team alignment
+**Suggested ADR Title**: document-architectural-change
+**Key Points**: 
+- Clarify the architectural decision being made
+- Document reasoning and alternatives considered
+- Ensure team understanding of the impact`, nil
+	}
+	
+	// Default to requiring ADR for safety when uncertain
+	return `**Decision**: Yes
+**Reasoning**: Unable to definitively categorize changes - recommending ADR for safety and team communication
+**Suggested ADR Title**: document-recent-changes
+**Key Points**: 
+- Review and document the purpose of these changes
+- Consider if they establish new patterns or approaches
+- Ensure team understanding and alignment`, nil
+}
+
+// extractChangesFromPrompt extracts the actual code changes from the analysis prompt
+func (i *Integration) extractChangesFromPrompt(prompt string) string {
+	lines := strings.Split(prompt, "\n")
+	inChangesSection := false
+	var changes []string
+	
+	for _, line := range lines {
+		if strings.Contains(line, "## Code Changes to Analyze") {
+			inChangesSection = true
+			continue
+		}
+		if inChangesSection {
+			if strings.HasPrefix(line, "##") && !strings.Contains(line, "Code Changes") {
+				break
+			}
+			if !strings.HasPrefix(line, "```") {
+				changes = append(changes, line)
+			}
+		}
+	}
+	
+	return strings.Join(changes, "\n")
 }

@@ -317,3 +317,96 @@ func (m *Manager) generateSimpleTemplate(adr *ADR) string {
 *ADR-%04d created by DrDuck on %s*
 `, adr.Title, adr.Status, adr.Date.Format("2006-01-02"), adr.ID, adr.Date.Format("2006-01-02"))
 }
+
+// GetDraftADRs returns all ADRs currently in draft status
+func (m *Manager) GetDraftADRs() ([]*ADR, error) {
+	allADRs, err := m.List()
+	if err != nil {
+		return nil, err
+	}
+
+	var drafts []*ADR
+	for _, adr := range allADRs {
+		if adr.Status == StatusDraft {
+			drafts = append(drafts, adr)
+		}
+	}
+
+	return drafts, nil
+}
+
+// HasDraftADRs checks if there are any ADRs in draft status
+func (m *Manager) HasDraftADRs() (bool, error) {
+	drafts, err := m.GetDraftADRs()
+	if err != nil {
+		return false, err
+	}
+	return len(drafts) > 0, nil
+}
+
+// GetADRByID retrieves an ADR by its ID
+func (m *Manager) GetADRByID(id int) (*ADR, error) {
+	adrs, err := m.List()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, adr := range adrs {
+		if adr.ID == id {
+			return adr, nil
+		}
+	}
+
+	return nil, fmt.Errorf("ADR with ID %d not found", id)
+}
+
+// UpdateADRStatus updates the status of an ADR
+func (m *Manager) UpdateADRStatus(id int, newStatus Status) error {
+	adr, err := m.GetADRByID(id)
+	if err != nil {
+		return err
+	}
+
+	// Read the current file content
+	content, err := os.ReadFile(adr.FilePath)
+	if err != nil {
+		return fmt.Errorf("failed to read ADR file: %w", err)
+	}
+
+	// Update the status in the content
+	lines := strings.Split(string(content), "\n")
+	for i, line := range lines {
+		if strings.Contains(strings.ToLower(line), "status:") {
+			// Replace the status line
+			if strings.Contains(line, "**Status**:") {
+				lines[i] = fmt.Sprintf("**Status**: %s", newStatus)
+			} else if strings.Contains(line, "* **Status**:") {
+				lines[i] = fmt.Sprintf("* **Status**: %s", newStatus)
+			}
+			break
+		}
+	}
+
+	// Write back the updated content
+	updatedContent := strings.Join(lines, "\n")
+	if err := os.WriteFile(adr.FilePath, []byte(updatedContent), 0644); err != nil {
+		return fmt.Errorf("failed to update ADR file: %w", err)
+	}
+
+	return nil
+}
+
+// GetStatusCounts returns a count of ADRs by status
+func (m *Manager) GetStatusCounts() (map[Status]int, error) {
+	adrs, err := m.List()
+	if err != nil {
+		return nil, err
+	}
+
+	counts := make(map[Status]int)
+	for _, adr := range adrs {
+		counts[adr.Status]++
+	}
+
+	return counts, nil
+}

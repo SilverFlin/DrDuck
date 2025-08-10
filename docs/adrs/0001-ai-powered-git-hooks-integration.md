@@ -1,4 +1,4 @@
-# npm deploy
+# ai-powered-git-hooks-integration
 
 * **Status**: Draft
 * **Date**: 2025-08-09
