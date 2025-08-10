@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SilverFlin/DrDuck/internal/adr"
 	"github.com/SilverFlin/DrDuck/internal/ai"
@@ -121,6 +122,17 @@ func runCompleteADR(cmd *cobra.Command, args []string) error {
 			fmt.Println("---")
 			fmt.Println(changeAnalysis)
 			fmt.Println("---")
+			
+			// Check if AI recommends skipping ADR creation
+			if createNewADR && shouldSkipADRCreation(changeAnalysis) {
+				shouldSkip, err := askUserToSkipADR(changeAnalysis)
+				if err != nil {
+					return fmt.Errorf("failed to get user decision: %w", err)
+				}
+				if shouldSkip {
+					return nil // Exit early, ADR creation skipped
+				}
+			}
 		}
 	}
 
@@ -204,44 +216,431 @@ func createNewADRFromChanges(adrManager *adr.Manager, aiManager *ai.Manager) (*a
 	return adrManager.Create(suggestedTitle)
 }
 
-// analyzeRecentChanges gets git changes and AI analysis
+// analyzeRecentChanges gets git changes and AI analysis with timeout protection
 func analyzeRecentChanges(aiManager *ai.Manager) (changes string, analysis string, err error) {
+	// Get basic changes summary first (fast)
 	changes, err = getGitChangesSummary()
 	if err != nil {
-		return "", "", err
+		changes = "Could not detect git changes - proceeding with manual input"
+		return changes, "Git analysis unavailable", nil
 	}
 
-	if changes == "" {
-		return "", "No significant changes detected", nil
+	if changes == "" || changes == "No git changes detected" {
+		return changes, "No significant changes detected", nil
 	}
 
 	if !aiManager.IsAvailable() {
 		return changes, "AI analysis not available - using change detection only", nil
 	}
 
-	// Get AI analysis of the changes
-	prompt := templates.ChangeAnalysisPrompt("", changes, "")
-	analysis, err = aiManager.AnalyzeChanges(prompt)
+	// Try to get detailed changes for AI analysis (may be large)
+	fmt.Print("Getting detailed changes for AI analysis... ")
+	detailedChanges, wasTruncated, err := getDetailedChanges()
+	if err != nil {
+		fmt.Println("failed, using summary")
+		detailedChanges = changes // Fallback to summary
+		wasTruncated = false
+	} else {
+		if wasTruncated {
+			fmt.Println("large changeset detected, truncated for analysis")
+		} else {
+			fmt.Println("done")
+		}
+	}
+
+	// Prepare AI prompt with size-aware content
+	var promptChanges string
+	if wasTruncated {
+		// Use summary + truncated details for large changes
+		promptChanges = fmt.Sprintf("LARGE CHANGESET (truncated):\n%s", detailedChanges)
+	} else {
+		promptChanges = detailedChanges
+	}
+
+	// Run AI analysis with timeout protection
+	fmt.Print("Running AI analysis... ")
+	analysis, err = analyzeWithTimeout(aiManager, promptChanges, 30*time.Second)
+	if err != nil {
+		fmt.Printf("failed (%v), using fallback\n", err)
+		// Provide intelligent fallback analysis based on change patterns
+		analysis = generateFallbackAnalysis(changes, wasTruncated)
+		err = nil // Clear error so workflow continues
+	} else {
+		fmt.Println("completed")
+	}
+	
 	return changes, analysis, err
 }
 
-// getGitChangesSummary gets a summary of recent git changes
+// analyzeWithTimeout runs AI analysis with a timeout
+func analyzeWithTimeout(aiManager *ai.Manager, changes string, timeout time.Duration) (string, error) {
+	type result struct {
+		analysis string
+		err      error
+	}
+
+	// Create channel for result
+	resultChan := make(chan result, 1)
+
+	// Run analysis in goroutine
+	go func() {
+		prompt := templates.ChangeAnalysisPrompt("", changes, "")
+		analysis, err := aiManager.AnalyzeChanges(prompt)
+		resultChan <- result{analysis, err}
+	}()
+
+	// Wait for result or timeout
+	select {
+	case res := <-resultChan:
+		return res.analysis, res.err
+	case <-time.After(timeout):
+		return "", fmt.Errorf("AI analysis timed out after %v", timeout)
+	}
+}
+
+// generateFallbackAnalysis creates intelligent fallback when AI fails
+func generateFallbackAnalysis(changes string, wasTruncated bool) string {
+	var analysis strings.Builder
+	
+	if wasTruncated {
+		analysis.WriteString("🔍 Large changeset detected - providing summary analysis:\n\n")
+	} else {
+		analysis.WriteString("🔍 AI unavailable - providing heuristic analysis:\n\n")
+	}
+
+	// Parse changes for patterns
+	changesLower := strings.ToLower(changes)
+	
+	// Detect change types
+	var changeTypes []string
+	if strings.Contains(changesLower, "database") || strings.Contains(changesLower, "migration") ||
+	   strings.Contains(changesLower, "sql") || strings.Contains(changesLower, "schema") {
+		changeTypes = append(changeTypes, "Database/Schema changes")
+	}
+	if strings.Contains(changesLower, "api") || strings.Contains(changesLower, "endpoint") ||
+	   strings.Contains(changesLower, "route") || strings.Contains(changesLower, "controller") {
+		changeTypes = append(changeTypes, "API/Interface changes")
+	}
+	if strings.Contains(changesLower, "config") || strings.Contains(changesLower, "env") ||
+	   strings.Contains(changesLower, "settings") {
+		changeTypes = append(changeTypes, "Configuration changes")
+	}
+	if strings.Contains(changesLower, "security") || strings.Contains(changesLower, "auth") ||
+	   strings.Contains(changesLower, "permission") {
+		changeTypes = append(changeTypes, "Security-related changes")
+	}
+
+	if len(changeTypes) > 0 {
+		analysis.WriteString("**Detected Change Types:**\n")
+		for _, changeType := range changeTypes {
+			analysis.WriteString(fmt.Sprintf("- %s\n", changeType))
+		}
+		analysis.WriteString("\n")
+	}
+
+	// Count modified files
+	lines := strings.Split(changes, "\n")
+	fileCount := 0
+	for _, line := range lines {
+		if strings.Contains(line, " |") && (strings.Contains(line, "+") || strings.Contains(line, "-")) {
+			fileCount++
+		}
+	}
+
+	if fileCount > 0 {
+		analysis.WriteString(fmt.Sprintf("**Scale:** %d files modified\n", fileCount))
+		if fileCount > 10 {
+			analysis.WriteString("**Impact:** Likely significant - multiple files affected\n")
+		} else if fileCount > 3 {
+			analysis.WriteString("**Impact:** Moderate - several files affected\n") 
+		} else {
+			analysis.WriteString("**Impact:** Focused - few files affected\n")
+		}
+		analysis.WriteString("\n")
+	}
+
+	analysis.WriteString("**Recommendation:** Given the scope of changes, documenting the architectural decisions would help team understanding.")
+	
+	return analysis.String()
+}
+
+// getGitChangesSummary gets a summary of git changes using the same logic as pre-push validation
 func getGitChangesSummary() (string, error) {
-	// Try to get diff since last push
-	cmd := exec.Command("git", "diff", "HEAD~1..HEAD", "--stat")
-	output, err := cmd.Output()
+	// First try to get changes since last push (same as pre-push hook)
+	changes, err := getChangesSinceLastPush()
+	if err == nil && len(strings.TrimSpace(changes)) > 0 {
+		return changes, nil
+	}
+
+	// Fallback to working directory changes
+	var output []byte
+
+	// Try unstaged changes
+	cmd := exec.Command("git", "diff", "--stat")
+	output, err = cmd.Output()
+	if err == nil && len(strings.TrimSpace(string(output))) > 0 {
+		return string(output), nil
+	}
+
+	// Try staged changes  
+	cmd = exec.Command("git", "diff", "--cached", "--stat")
+	output, err = cmd.Output()
+	if err == nil && len(strings.TrimSpace(string(output))) > 0 {
+		return string(output), nil
+	}
+
+	// Try recent commit
+	cmd = exec.Command("git", "diff", "HEAD~1", "--stat")
+	output, err = cmd.Output()
+	if err == nil && len(strings.TrimSpace(string(output))) > 0 {
+		return string(output), nil
+	}
+
+	// Git status as final fallback
+	cmd = exec.Command("git", "status", "--porcelain")
+	output, err = cmd.Output()
+	if err == nil && len(strings.TrimSpace(string(output))) > 0 {
+		return "Modified files detected:\n" + string(output), nil
+	}
+
+	return "No git changes detected", nil
+}
+
+// getChangesSinceLastPush gets changes since last push (same logic as pre-push hook)
+func getChangesSinceLastPush() (string, error) {
+	// Get current branch
+	branchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	branchOutput, err := branchCmd.Output()
 	if err != nil {
-		// Fallback to staged changes
-		cmd = exec.Command("git", "diff", "--cached", "--stat")
-		output, err = cmd.Output()
+		return "", fmt.Errorf("failed to get current branch: %w", err)
+	}
+	branch := strings.TrimSpace(string(branchOutput))
+
+	// Try to get diff against origin (multiple commits)
+	remoteBranch := fmt.Sprintf("origin/%s", branch)
+	diffCmd := exec.Command("git", "diff", remoteBranch+"..HEAD", "--stat")
+	output, err := diffCmd.Output()
+	
+	// If no remote, try to get last 3 commits
+	if err != nil {
+		diffCmd = exec.Command("git", "diff", "HEAD~3..HEAD", "--stat")
+		output, err = diffCmd.Output()
+		
+		// If still no luck, get all staged and unstaged changes
 		if err != nil {
-			// Fallback to unstaged changes
-			cmd = exec.Command("git", "diff", "--stat")
-			output, err = cmd.Output()
+			diffCmd = exec.Command("git", "diff", "HEAD", "--stat")
+			output, err = diffCmd.Output()
 		}
 	}
 
 	return string(output), err
+}
+
+// Constants for diff analysis limits
+const (
+	MaxDiffLines    = 1000  // Maximum lines of diff to analyze
+	MaxDiffSize     = 50000 // Maximum characters in diff
+	MaxFilesChanged = 50    // Maximum files to analyze in detail
+)
+
+// getDetailedChanges gets actual code changes (not just stats) with size limits
+func getDetailedChanges() (string, bool, error) {
+	// Try to get actual diff content (not just stats) with limits
+	changes, err := getChangesSinceLastPush()
+	if err != nil || strings.TrimSpace(changes) == "" {
+		// Fallback to working directory changes
+		cmd := exec.Command("git", "diff")
+		output, err := cmd.Output()
+		if err == nil && len(strings.TrimSpace(string(output))) > 0 {
+			changes = string(output)
+		}
+	} else {
+		// Get full diff content for the range
+		remoteBranch, err := getCurrentRemoteBranch()
+		if err == nil {
+			cmd := exec.Command("git", "diff", remoteBranch+"..HEAD")
+			output, err := cmd.Output()
+			if err == nil {
+				changes = string(output)
+			}
+		}
+	}
+
+	if strings.TrimSpace(changes) == "" {
+		return "No changes detected", false, nil
+	}
+
+	// Apply size limits and filtering
+	filteredChanges, wasTruncated := filterAndLimitChanges(changes)
+	return filteredChanges, wasTruncated, nil
+}
+
+// getCurrentRemoteBranch gets the remote tracking branch
+func getCurrentRemoteBranch() (string, error) {
+	branchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	branchOutput, err := branchCmd.Output()
+	if err != nil {
+		return "", err
+	}
+	branch := strings.TrimSpace(string(branchOutput))
+	return fmt.Sprintf("origin/%s", branch), nil
+}
+
+// filterAndLimitChanges applies intelligent filtering and size limits to git changes
+func filterAndLimitChanges(changes string) (string, bool) {
+	lines := strings.Split(changes, "\n")
+	var filteredLines []string
+	var currentFile string
+	var addedLines, removedLines int
+	var filesChanged int
+	var wasTruncated bool
+
+	// Track file-level changes for summary
+	fileChanges := make(map[string]struct {
+		added   int
+		removed int
+	})
+
+	for _, line := range lines {
+		// Check if we've hit size limits
+		if len(strings.Join(filteredLines, "\n")) > MaxDiffSize {
+			wasTruncated = true
+			break
+		}
+
+		// Skip auto-generated or less important files
+		if strings.HasPrefix(line, "diff --git") {
+			filesChanged++
+			if filesChanged > MaxFilesChanged {
+				wasTruncated = true
+				break
+			}
+
+			// Extract file path
+			parts := strings.Fields(line)
+			if len(parts) >= 4 {
+				currentFile = parts[3][2:] // Remove "b/" prefix
+			}
+
+			// Skip auto-generated files
+			if shouldSkipFile(currentFile) {
+				currentFile = "" // Mark to skip
+				continue
+			}
+		}
+
+		// Skip if we're in a file we want to ignore
+		if currentFile == "" {
+			continue
+		}
+
+		// Track line changes
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			addedLines++
+			if stats, exists := fileChanges[currentFile]; exists {
+				stats.added++
+				fileChanges[currentFile] = stats
+			} else {
+				fileChanges[currentFile] = struct {
+					added   int
+					removed int
+				}{added: 1, removed: 0}
+			}
+		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+			removedLines++
+			if stats, exists := fileChanges[currentFile]; exists {
+				stats.removed++
+				fileChanges[currentFile] = stats
+			} else {
+				fileChanges[currentFile] = struct {
+					added   int
+					removed int
+				}{added: 0, removed: 1}
+			}
+		}
+
+		// Add line to filtered output
+		filteredLines = append(filteredLines, line)
+
+		// Check line count limit
+		if len(filteredLines) > MaxDiffLines {
+			wasTruncated = true
+			break
+		}
+	}
+
+	result := strings.Join(filteredLines, "\n")
+
+	// Add summary if truncated
+	if wasTruncated {
+		summary := generateChangesSummary(fileChanges, addedLines, removedLines, filesChanged)
+		result = summary + "\n\n" + result + "\n\n[... content truncated due to size ...]"
+	}
+
+	return result, wasTruncated
+}
+
+// shouldSkipFile determines if a file should be skipped during analysis
+func shouldSkipFile(filepath string) bool {
+	skipPatterns := []string{
+		// Auto-generated files
+		".generated.", "_generated.", "generated/",
+		
+		// Build artifacts
+		"node_modules/", "vendor/", "target/", "build/", "dist/", ".git/",
+		
+		// Lock files
+		"package-lock.json", "yarn.lock", "Cargo.lock", "go.sum", "composer.lock",
+		
+		// Documentation (unless it's architectural)
+		".md", ".txt", ".rst", ".asciidoc",
+		
+		// Binary files
+		".png", ".jpg", ".jpeg", ".gif", ".pdf", ".zip", ".tar", ".gz",
+		
+		// IDE files
+		".vscode/", ".idea/", "*.iml", ".DS_Store",
+		
+		// Test data
+		"test-data/", "fixtures/", "mocks/",
+	}
+
+	lowerPath := strings.ToLower(filepath)
+	for _, pattern := range skipPatterns {
+		if strings.Contains(lowerPath, pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// generateChangesSummary creates a high-level summary of changes
+func generateChangesSummary(fileChanges map[string]struct {
+	added   int
+	removed int
+}, totalAdded, totalRemoved, totalFiles int) string {
+	var summary strings.Builder
+	
+	summary.WriteString("=== CHANGES SUMMARY ===\n")
+	summary.WriteString(fmt.Sprintf("Files changed: %d, Lines added: %d, Lines removed: %d\n\n", 
+		totalFiles, totalAdded, totalRemoved))
+	
+	summary.WriteString("Key files modified:\n")
+	count := 0
+	for file, stats := range fileChanges {
+		if count >= 10 { // Show top 10 files
+			break
+		}
+		summary.WriteString(fmt.Sprintf("- %s (+%d -%d)\n", file, stats.added, stats.removed))
+		count++
+	}
+	
+	if len(fileChanges) > 10 {
+		summary.WriteString(fmt.Sprintf("... and %d more files\n", len(fileChanges)-10))
+	}
+	
+	return summary.String()
 }
 
 // QuestionnairResponse holds user responses to ADR questions
@@ -419,43 +818,49 @@ func generateADRContent(aiManager *ai.Manager, targetADR *adr.ADR, changes, chan
 func createComprehensiveADRPrompt(targetADR *adr.ADR, changes, changeAnalysis string, responses *QuestionnaireResponse) string {
 	var promptBuilder strings.Builder
 
-	promptBuilder.WriteString("You are Dr Duck, an expert software architect. Generate complete ADR content based on the following information:\n\n")
+	promptBuilder.WriteString("You are Dr Duck, an expert software architect. Your task is to write a complete ADR (Architectural Decision Record) in proper MADR format.\n\n")
 	
-	promptBuilder.WriteString(fmt.Sprintf("**ADR Title**: %s\n", targetADR.Title))
-	promptBuilder.WriteString(fmt.Sprintf("**Date**: %s\n\n", targetADR.Date.Format("2006-01-02")))
+	promptBuilder.WriteString("IMPORTANT: Do NOT provide analysis or recommendations. Write the actual ADR content as if the decision has already been made.\n\n")
+
+	promptBuilder.WriteString("Information to use:\n")
+	promptBuilder.WriteString(fmt.Sprintf("- ADR Title: %s\n", targetADR.Title))
+	promptBuilder.WriteString(fmt.Sprintf("- Date: %s\n", targetADR.Date.Format("2006-01-02")))
 
 	if changes != "" {
-		promptBuilder.WriteString("**Code Changes**:\n")
-		promptBuilder.WriteString(changes)
-		promptBuilder.WriteString("\n\n")
+		promptBuilder.WriteString(fmt.Sprintf("- Code Changes: %s\n", changes))
 	}
 
-	if changeAnalysis != "" {
-		promptBuilder.WriteString("**Technical Analysis**:\n")
-		promptBuilder.WriteString(changeAnalysis)
-		promptBuilder.WriteString("\n\n")
-	}
-
-	promptBuilder.WriteString("**User Responses**:\n")
-	promptBuilder.WriteString(fmt.Sprintf("Problem/Context: %s\n", responses.ProblemContext))
-	promptBuilder.WriteString(fmt.Sprintf("Decision Made: %s\n", responses.DecisionMade))
-	promptBuilder.WriteString(fmt.Sprintf("Rationale: %s\n", responses.WhyThisSolution))
-	promptBuilder.WriteString(fmt.Sprintf("Alternatives: %s\n", responses.AlternativesConsidered))
-	promptBuilder.WriteString(fmt.Sprintf("Trade-offs: %s\n", responses.TradeOffs))
-	promptBuilder.WriteString(fmt.Sprintf("Future Considerations: %s\n", responses.FutureImplications))
+	promptBuilder.WriteString(fmt.Sprintf("- Problem/Context: %s\n", responses.ProblemContext))
+	promptBuilder.WriteString(fmt.Sprintf("- Decision Made: %s\n", responses.DecisionMade))
+	promptBuilder.WriteString(fmt.Sprintf("- Rationale: %s\n", responses.WhyThisSolution))
+	promptBuilder.WriteString(fmt.Sprintf("- Alternatives: %s\n", responses.AlternativesConsidered))
+	promptBuilder.WriteString(fmt.Sprintf("- Trade-offs: %s\n", responses.TradeOffs))
+	promptBuilder.WriteString(fmt.Sprintf("- Future Considerations: %s\n", responses.FutureImplications))
 	if responses.AdditionalContext != "" {
-		promptBuilder.WriteString(fmt.Sprintf("Additional Context: %s\n", responses.AdditionalContext))
+		promptBuilder.WriteString(fmt.Sprintf("- Additional Context: %s\n", responses.AdditionalContext))
 	}
 
-	promptBuilder.WriteString("\n**Task**: Generate complete ADR content in MADR format with these sections:\n")
-	promptBuilder.WriteString("- Context (the problem/situation)\n")
-	promptBuilder.WriteString("- Decision (what was decided)\n")
-	promptBuilder.WriteString("- Rationale (why this decision)\n") 
-	promptBuilder.WriteString("- Consequences (positive, negative, neutral impacts)\n")
-	promptBuilder.WriteString("- Alternatives Considered (what else was evaluated)\n\n")
+	promptBuilder.WriteString("\nGenerate ONLY the ADR content in this exact format:\n\n")
+	promptBuilder.WriteString("# [title]\n\n")
+	promptBuilder.WriteString("* **Status**: Draft\n")
+	promptBuilder.WriteString("* **Date**: [date]\n\n")
+	promptBuilder.WriteString("## Context\n\n")
+	promptBuilder.WriteString("[Describe the problem/situation]\n\n")
+	promptBuilder.WriteString("## Decision\n\n")
+	promptBuilder.WriteString("[Describe what was decided]\n\n")
+	promptBuilder.WriteString("## Rationale\n\n")
+	promptBuilder.WriteString("[Explain why this decision was made]\n\n")
+	promptBuilder.WriteString("## Consequences\n\n")
+	promptBuilder.WriteString("### Positive\n\n")
+	promptBuilder.WriteString("[What becomes easier or better]\n\n")
+	promptBuilder.WriteString("### Negative\n\n")
+	promptBuilder.WriteString("[What becomes more difficult]\n\n")
+	promptBuilder.WriteString("### Neutral\n\n")
+	promptBuilder.WriteString("[Other implications]\n\n")
+	promptBuilder.WriteString("## Alternatives Considered\n\n")
+	promptBuilder.WriteString("[Other options that were evaluated]\n\n")
 	
-	promptBuilder.WriteString("Write in clear, professional language. Be specific and actionable. ")
-	promptBuilder.WriteString("Include technical details where relevant but keep it accessible to team members.")
+	promptBuilder.WriteString("Write in clear, professional language. Replace [brackets] with actual content. Do NOT include analysis comments or suggestions - just write the ADR content.")
 
 	return promptBuilder.String()
 }
@@ -466,7 +871,7 @@ func generateFallbackContent(targetADR *adr.ADR, responses *QuestionnaireRespons
 
 	content.WriteString(fmt.Sprintf("# %s\n\n", targetADR.Title))
 	content.WriteString(fmt.Sprintf("* **Status**: %s\n", targetADR.Status))
-	content.WriteString(fmt.Sprintf("* **Date**: %s\n\n", targetADR.Date.Format("2006-01-02")))
+	content.WriteString(fmt.Sprintf("* **Date**: %s\n\n", time.Now().Format("2006-01-02")))
 
 	content.WriteString("## Context\n\n")
 	if responses.ProblemContext != "" {
@@ -534,7 +939,7 @@ func generateFallbackContent(targetADR *adr.ADR, responses *QuestionnaireRespons
 
 	content.WriteString("---\n")
 	content.WriteString(fmt.Sprintf("*ADR-%04d completed with DrDuck AI assistance on %s*\n", 
-		targetADR.ID, targetADR.Date.Format("2006-01-02")))
+		targetADR.ID, time.Now().Format("2006-01-02")))
 
 	return content.String()
 }

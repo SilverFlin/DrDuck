@@ -179,6 +179,7 @@ func (m *Manager) parseADRFile(filePath string, id int) (*ADR, error) {
 		ID:       id,
 		FilePath: filePath,
 		Status:   StatusDraft, // Default status
+		Date:     time.Now(),   // Default to current date if not found in file
 	}
 
 	// Simple parsing - look for title and status
