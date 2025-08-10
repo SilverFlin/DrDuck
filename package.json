@@ -1,6 +1,6 @@
 {
   "name": "drduck",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DocOps CLI tool for automated documentation workflows with AI integration",
   "main": "bin/drduck",
   "bin": {
@@ -8,7 +8,12 @@
   },
   "scripts": {
     "preinstall": "node scripts/install.js",
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js",
+    "sync-version": "node scripts/sync-version.js",
+    "release": "npm run sync-version && npm publish",
+    "release:patch": "node scripts/release.js patch",
+    "release:minor": "node scripts/release.js minor", 
+    "release:major": "node scripts/release.js major"
   },
   "repository": {
     "type": "git",
