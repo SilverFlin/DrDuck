@@ -173,6 +173,13 @@ func runCompleteADR(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("status update failed: %w", err)
 	}
 
+	// Step 7: Ask about title confirmation for new ADRs
+	if isNewADR {
+		if err := handleTitleConfirmation(adrManager, targetADR); err != nil {
+			return fmt.Errorf("title confirmation failed: %w", err)
+		}
+	}
+
 	fmt.Println("\n🎉 ADR completion successful!")
 	fmt.Printf("📄 File: %s\n", targetADR.FilePath)
 	fmt.Println("💡 Your changes should now pass the pre-push hook")
@@ -1112,5 +1119,106 @@ func handleADRStatusUpdate(adrManager *adr.Manager, targetADR *adr.ADR, isNewADR
 		fmt.Printf("✅ ADR-%04d status updated to %s\n", targetADR.ID, newStatus)
 	}
 
+	return nil
+}
+
+// handleTitleConfirmation prompts user to confirm or change the ADR title
+func handleTitleConfirmation(adrManager *adr.Manager, targetADR *adr.ADR) error {
+	var keepTitle bool
+	
+	currentTitle := targetADR.Title
+	prompt := fmt.Sprintf("Keep the current title '%s'?", currentTitle)
+	
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title(prompt).
+				Affirmative("Yes, keep it").
+				Negative("No, change it").
+				Value(&keepTitle),
+		),
+	)
+	
+	if err := form.Run(); err != nil {
+		return fmt.Errorf("failed to get title confirmation: %w", err)
+	}
+	
+	if !keepTitle {
+		var newTitle string
+		newTitleForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Enter new ADR title:").
+					Placeholder("e.g., api-versioning-strategy").
+					Value(&newTitle).
+					Validate(func(str string) error {
+						if strings.TrimSpace(str) == "" {
+							return fmt.Errorf("title cannot be empty")
+						}
+						return nil
+					}),
+			),
+		)
+		
+		if err := newTitleForm.Run(); err != nil {
+			return fmt.Errorf("failed to get new title: %w", err)
+		}
+		
+		newTitle = strings.TrimSpace(newTitle)
+		if newTitle != currentTitle {
+			fmt.Printf("📝 Renaming ADR from '%s' to '%s'...\n", currentTitle, newTitle)
+			
+			// Update the title and rename the file
+			if err := renameADRFile(adrManager, targetADR, newTitle); err != nil {
+				return fmt.Errorf("failed to rename ADR: %w", err)
+			}
+			
+			fmt.Printf("✅ ADR-%04d renamed to '%s'\n", targetADR.ID, newTitle)
+		}
+	}
+	
+	return nil
+}
+
+// renameADRFile renames an ADR file and updates the title in the content
+func renameADRFile(adrManager *adr.Manager, targetADR *adr.ADR, newTitle string) error {
+	// Read current file content
+	currentContent, err := os.ReadFile(targetADR.FilePath)
+	if err != nil {
+		return fmt.Errorf("failed to read current ADR file: %w", err)
+	}
+	
+	// Generate new filename
+	newFilename := fmt.Sprintf("%04d-%s.md", targetADR.ID, strings.ReplaceAll(strings.ToLower(newTitle), " ", "-"))
+	newFilePath := filepath.Join(filepath.Dir(targetADR.FilePath), newFilename)
+	
+	// Update title in content
+	content := string(currentContent)
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "# ") {
+			lines[i] = fmt.Sprintf("# %s", newTitle)
+			break
+		}
+	}
+	updatedContent := strings.Join(lines, "\n")
+	
+	// Write to new file
+	if err := os.WriteFile(newFilePath, []byte(updatedContent), 0644); err != nil {
+		return fmt.Errorf("failed to write new ADR file: %w", err)
+	}
+	
+	// Remove old file if it's different from the new one
+	if targetADR.FilePath != newFilePath {
+		if err := os.Remove(targetADR.FilePath); err != nil {
+			// Log warning but don't fail - new file was created successfully
+			fmt.Printf("⚠️  Warning: failed to remove old file %s: %v\n", targetADR.FilePath, err)
+		}
+	}
+	
+	// Update the ADR object
+	targetADR.Title = newTitle
+	targetADR.FilePath = newFilePath
+	
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/SilverFlin/DrDuck/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 type Status string
@@ -167,6 +168,14 @@ func (m *Manager) List() ([]*ADR, error) {
 	return adrs, nil
 }
 
+// FrontMatter represents the YAML front matter in ADR files
+type FrontMatter struct {
+	ID     int    `yaml:"id"`
+	Title  string `yaml:"title"`
+	Status string `yaml:"status"`
+	Date   string `yaml:"date"`
+}
+
 // parseADRFile parses an ADR file and extracts metadata
 func (m *Manager) parseADRFile(filePath string, id int) (*ADR, error) {
 	content, err := os.ReadFile(filePath)
@@ -174,15 +183,35 @@ func (m *Manager) parseADRFile(filePath string, id int) (*ADR, error) {
 		return nil, err
 	}
 
-	lines := strings.Split(string(content), "\n")
 	adr := &ADR{
 		ID:       id,
 		FilePath: filePath,
 		Status:   StatusDraft, // Default status
-		Date:     time.Now(),   // Default to current date if not found in file
+		Date:     time.Now(),   // Default to current date if not found
 	}
 
-	// Simple parsing - look for title and status
+	contentStr := string(content)
+	
+	// Try to parse front matter first
+	if strings.HasPrefix(contentStr, "---\n") {
+		endIndex := strings.Index(contentStr[4:], "\n---\n")
+		if endIndex != -1 {
+			frontMatterStr := contentStr[4 : endIndex+4]
+			var frontMatter FrontMatter
+			if err := yaml.Unmarshal([]byte(frontMatterStr), &frontMatter); err == nil {
+				adr.ID = frontMatter.ID
+				adr.Title = frontMatter.Title
+				adr.Status = Status(frontMatter.Status)
+				if parsedDate, err := time.Parse("2006-01-02", frontMatter.Date); err == nil {
+					adr.Date = parsedDate
+				}
+				return adr, nil
+			}
+		}
+	}
+
+	// Fallback to legacy parsing for existing files without front matter
+	lines := strings.Split(contentStr, "\n")
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		
@@ -192,9 +221,8 @@ func (m *Manager) parseADRFile(filePath string, id int) (*ADR, error) {
 			continue
 		}
 
-		// Extract status
+		// Extract status (various formats)
 		if strings.Contains(strings.ToLower(line), "status:") {
-			// Find status after "Status:"
 			statusIdx := strings.Index(strings.ToLower(line), "status:")
 			if statusIdx != -1 {
 				statusText := strings.TrimSpace(line[statusIdx+7:])
@@ -203,21 +231,8 @@ func (m *Manager) parseADRFile(filePath string, id int) (*ADR, error) {
 			continue
 		}
 
-		// Extract date
-		if strings.Contains(strings.ToLower(line), "date:") {
-			dateIdx := strings.Index(strings.ToLower(line), "date:")
-			if dateIdx != -1 {
-				dateText := strings.TrimSpace(line[dateIdx+5:])
-				if parsedDate, err := time.Parse("2006-01-02", dateText); err == nil {
-					adr.Date = parsedDate
-				}
-			}
-			continue
-		}
-
-		// Extract context, decision, etc. (basic implementation)
+		// Extract context for legacy files
 		if i < len(lines)-1 && strings.HasPrefix(trimmed, "## Context") {
-			// Find content until next section
 			j := i + 1
 			var contextLines []string
 			for j < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[j]), "##") {
@@ -249,7 +264,14 @@ func (m *Manager) generateFromTemplate(adr *ADR) (string, error) {
 
 // generateMADRTemplate generates content using MADR template
 func (m *Manager) generateMADRTemplate(adr *ADR) string {
-	return fmt.Sprintf(`# %s
+	return fmt.Sprintf(`---
+id: %d
+title: "%s"
+status: "%s"
+date: "%s"
+---
+
+# %s
 
 * **Status**: %s
 * **Date**: %s
@@ -290,12 +312,19 @@ func (m *Manager) generateMADRTemplate(adr *ADR) string {
 
 ---
 *ADR-%04d created by DrDuck on %s*
-`, adr.Title, adr.Status, adr.Date.Format("2006-01-02"), adr.ID, adr.Date.Format("2006-01-02"))
+`, adr.ID, adr.Title, adr.Status, adr.Date.Format("2006-01-02"), adr.Title, adr.Status, adr.Date.Format("2006-01-02"), adr.ID, adr.Date.Format("2006-01-02"))
 }
 
 // generateNygardTemplate generates content using Michael Nygard's template
 func (m *Manager) generateNygardTemplate(adr *ADR) string {
-	return fmt.Sprintf(`# %s
+	return fmt.Sprintf(`---
+id: %d
+title: "%s"
+status: "%s"
+date: "%s"
+---
+
+# %s
 
 ## Status
 
@@ -315,12 +344,19 @@ What becomes easier or more difficult to do and any risks introduced by the chan
 
 ---
 *ADR-%04d created by DrDuck on %s*
-`, adr.Title, adr.Status, adr.ID, adr.Date.Format("2006-01-02"))
+`, adr.ID, adr.Title, adr.Status, adr.Date.Format("2006-01-02"), adr.Title, adr.Status, adr.ID, adr.Date.Format("2006-01-02"))
 }
 
 // generateSimpleTemplate generates content using simple template
 func (m *Manager) generateSimpleTemplate(adr *ADR) string {
-	return fmt.Sprintf(`# %s
+	return fmt.Sprintf(`---
+id: %d
+title: "%s"
+status: "%s"
+date: "%s"
+---
+
+# %s
 
 **Status**: %s  
 **Date**: %s
@@ -343,7 +379,7 @@ func (m *Manager) generateSimpleTemplate(adr *ADR) string {
 
 ---
 *ADR-%04d created by DrDuck on %s*
-`, adr.Title, adr.Status, adr.Date.Format("2006-01-02"), adr.ID, adr.Date.Format("2006-01-02"))
+`, adr.ID, adr.Title, adr.Status, adr.Date.Format("2006-01-02"), adr.Title, adr.Status, adr.Date.Format("2006-01-02"), adr.ID, adr.Date.Format("2006-01-02"))
 }
 
 // GetDraftADRs returns all ADRs currently in draft status
@@ -401,27 +437,34 @@ func (m *Manager) UpdateADRStatus(id int, newStatus Status) error {
 		return fmt.Errorf("failed to read ADR file: %w", err)
 	}
 
-	// Update the status in the content
-	lines := strings.Split(string(content), "\n")
-	for i, line := range lines {
-		if strings.Contains(strings.ToLower(line), "status:") {
-			// Replace the status line
-			if strings.Contains(line, "**Status**:") {
-				lines[i] = fmt.Sprintf("**Status**: %s", newStatus)
-			} else if strings.Contains(line, "* **Status**:") {
-				lines[i] = fmt.Sprintf("* **Status**: %s", newStatus)
+	contentStr := string(content)
+	
+	// Try to update front matter first
+	if strings.HasPrefix(contentStr, "---\n") {
+		endIndex := strings.Index(contentStr[4:], "\n---\n")
+		if endIndex != -1 {
+			frontMatterStr := contentStr[4 : endIndex+4]
+			var frontMatter FrontMatter
+			if err := yaml.Unmarshal([]byte(frontMatterStr), &frontMatter); err == nil {
+				// Update status in front matter
+				frontMatter.Status = string(newStatus)
+				updatedFrontMatter, err := yaml.Marshal(frontMatter)
+				if err == nil {
+					// Replace the front matter in the content
+					restOfContent := contentStr[endIndex+8:] // Skip "---\n" at the end
+					updatedContent := fmt.Sprintf("---\n%s---\n%s", string(updatedFrontMatter), restOfContent)
+					
+					if err := os.WriteFile(adr.FilePath, []byte(updatedContent), 0644); err != nil {
+						return fmt.Errorf("failed to update ADR file: %w", err)
+					}
+					return nil
+				}
 			}
-			break
 		}
 	}
-
-	// Write back the updated content
-	updatedContent := strings.Join(lines, "\n")
-	if err := os.WriteFile(adr.FilePath, []byte(updatedContent), 0644); err != nil {
-		return fmt.Errorf("failed to update ADR file: %w", err)
-	}
-
-	return nil
+	
+	// If no front matter found, return error - all new ADRs should use front matter
+	return fmt.Errorf("ADR file does not contain front matter - cannot update status")
 }
 
 // GetStatusCounts returns a count of ADRs by status
