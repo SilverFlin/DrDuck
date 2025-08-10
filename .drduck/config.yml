@@ -1,7 +1,31 @@
 ai_provider: claude-code
 doc_storage: same-repo
-adr_template: madr
+adr_template: nygard
 hooks:
     pre_commit: true
     pre_push: true
 doc_path: docs/adrs
+ai_settings:
+    persona: drduck
+    sensitivity: moderate
+    ignore_patterns:
+        - '*.md'
+        - '*.txt'
+        - docs/*
+        - README*
+        - test/*
+        - tests/*
+        - '*_test.go'
+        - '*.test.*'
+    require_adr_for:
+        - database
+        - architecture
+        - api design
+        - security
+        - performance
+    never_require_adr_for:
+        - typo
+        - formatting
+        - comment
+        - log message
+        - debug

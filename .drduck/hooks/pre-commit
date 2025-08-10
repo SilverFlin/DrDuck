@@ -1,15 +1,20 @@
 #!/bin/sh
 # DrDuck pre-commit hook
-# Validates ADR completeness for staged changes
+# Encourages ADR completion but never blocks commits
 
-echo "🦆 DrDuck: Checking ADR requirements..."
+echo "🦆 DrDuck: Checking for draft ADRs..."
 
 # Check if DrDuck is available
 if ! command -v drduck >/dev/null 2>&1; then
-    echo "⚠️  DrDuck command not found. Install DrDuck or run with --no-verify to skip."
-    exit 1
+    echo "⚠️  DrDuck command not found, but continuing with commit..."
+    echo "   Install DrDuck globally: npm install -g drduck"
+    exit 0
 fi
 
-# Run ADR validation (placeholder - will be implemented later)
-echo "✅ ADR validation passed"
+# Run pre-commit validation (warns but never blocks)
+if ! drduck validate --pre-commit 2>/dev/null; then
+    echo "⚠️  DrDuck validation had issues, but commit proceeding..."
+fi
+
+# Always exit successfully - pre-commit never blocks
 exit 0
