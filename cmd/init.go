@@ -127,6 +127,7 @@ func setupInteractive(cfg *config.Config) error {
 			huh.NewSelect[string]().
 				Title("Choose ADR template format:").
 				Options(
+					huh.NewOption("Nygard template (Michael Nygard's original ADR format)", "nygard").Selected(cfg.ADRTemplate == "nygard"),
 					huh.NewOption("MADR (Markdown Any Decision Records)", "madr").Selected(cfg.ADRTemplate == "madr"),
 					huh.NewOption("Simple template", "simple").Selected(cfg.ADRTemplate == "simple"),
 					huh.NewOption("Custom template", "custom").Selected(cfg.ADRTemplate == "custom"),

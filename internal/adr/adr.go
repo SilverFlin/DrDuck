@@ -236,12 +236,14 @@ func (m *Manager) parseADRFile(filePath string, id int) (*ADR, error) {
 // generateFromTemplate generates ADR content from the configured template
 func (m *Manager) generateFromTemplate(adr *ADR) (string, error) {
 	switch m.config.ADRTemplate {
+	case "nygard":
+		return m.generateNygardTemplate(adr), nil
 	case "madr":
 		return m.generateMADRTemplate(adr), nil
 	case "simple":
 		return m.generateSimpleTemplate(adr), nil
 	default:
-		return m.generateMADRTemplate(adr), nil // Default to MADR
+		return m.generateNygardTemplate(adr), nil // Default to Nygard
 	}
 }
 
@@ -289,6 +291,31 @@ func (m *Manager) generateMADRTemplate(adr *ADR) string {
 ---
 *ADR-%04d created by DrDuck on %s*
 `, adr.Title, adr.Status, adr.Date.Format("2006-01-02"), adr.ID, adr.Date.Format("2006-01-02"))
+}
+
+// generateNygardTemplate generates content using Michael Nygard's template
+func (m *Manager) generateNygardTemplate(adr *ADR) string {
+	return fmt.Sprintf(`# %s
+
+## Status
+
+%s
+
+## Context
+
+The issue motivating this decision, and any context that influences or constrains the decision.
+
+## Decision
+
+The change that we're proposing or have agreed to implement.
+
+## Consequences
+
+What becomes easier or more difficult to do and any risks introduced by the change that will need to be mitigated.
+
+---
+*ADR-%04d created by DrDuck on %s*
+`, adr.Title, adr.Status, adr.ID, adr.Date.Format("2006-01-02"))
 }
 
 // generateSimpleTemplate generates content using simple template

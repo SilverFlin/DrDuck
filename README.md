@@ -10,7 +10,7 @@ DrDuck is a command-line tool that integrates with AI coding assistants (Claude 
 - 📝 **ADR Management**: Create, list, and manage Architectural Decision Records
 - 🔄 **Git Hooks**: Optional pre-commit and pre-push hooks for documentation validation  
 - 📁 **Flexible Storage**: Store ADRs in the same repo or a separate documentation repository
-- 🎨 **Templates**: Support for MADR, simple, and custom ADR templates
+- 🎨 **Templates**: Support for Nygard, MADR, simple, and custom ADR templates
 - ⚡ **Interactive Setup**: Beautiful CLI prompts for configuration
 
 ## Quick Start
@@ -37,7 +37,7 @@ drduck init
 # This will prompt you to choose:
 # - AI provider (Claude Code CLI or Cursor)
 # - Documentation storage (same repo or separate repo)
-# - ADR template format (MADR, simple, custom)
+# - ADR template format (Nygard, MADR, simple, custom)
 # - Git hooks (pre-commit, pre-push)
 ```
 
@@ -66,7 +66,7 @@ DrDuck stores configuration in `.drduck/config.yml`:
 ```yaml
 ai_provider: "claude-code"     # or "cursor"
 doc_storage: "same-repo"       # or "separate-repo"
-adr_template: "madr"          # or "simple", "custom"
+adr_template: "nygard"        # or "madr", "simple", "custom"
 hooks:
   pre_commit: true            # Install pre-commit hook
   pre_push: false            # Install pre-push hook
@@ -92,7 +92,15 @@ docs/adrs/                  # ADRs (if same-repo storage)
 
 ## ADR Templates
 
-### MADR Template (Default)
+### Nygard Template (Default)
+
+Based on [Michael Nygard's original ADR format](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions), includes:
+- Status of the decision
+- Context that influences or constrains the decision
+- The decision we're proposing or implementing
+- Consequences of the decision
+
+### MADR Template
 
 Based on [Markdown Any Decision Records](https://adr.github.io/madr/), includes:
 - Context and problem statement

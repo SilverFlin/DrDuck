@@ -42,7 +42,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		AIProvider:  "claude-code",
 		DocStorage:  "same-repo",
-		ADRTemplate: "madr",
+		ADRTemplate: "nygard",
 		Hooks: HooksConfig{
 			PreCommit: false,
 			PrePush:   false,
