@@ -10,6 +10,7 @@ import (
 	"github.com/SilverFlin/DrDuck/internal/ai"
 	"github.com/SilverFlin/DrDuck/internal/config"
 	"github.com/SilverFlin/DrDuck/internal/prompts/templates"
+	"github.com/charmbracelet/huh"
 )
 
 // ValidationResult represents the result of hook validation
@@ -141,6 +142,22 @@ func (v *Validator) ValidatePrePush() *ValidationResult {
 	result.SuggestedTitle = suggestedTitle
 
 	if needsADR {
+		// Ask user if they want to create ADR automatically
+		shouldCreate, err := v.askUserToCreateADR(suggestedTitle, aiResponse)
+		if err == nil && shouldCreate {
+			// Run complete-adr --create automatically
+			createResult := v.runCompleteADRCreate()
+			if createResult.Success {
+				result.Message = fmt.Sprintf("🎉 ADR created successfully!\n%s\n\n✅ Push proceeding...", createResult.Message)
+				return result
+			} else {
+				result.ShouldBlock = true
+				result.Message = fmt.Sprintf("❌ ADR creation failed: %s\n\nPlease create ADR manually or use --no-verify", createResult.Message)
+				return result
+			}
+		}
+
+		// User declined or error occurred - show original blocking message
 		result.ShouldBlock = true
 		var messageBuilder strings.Builder
 		messageBuilder.WriteString("🚫 DrDuck: These changes appear to need an ADR!\n\n")
@@ -293,4 +310,56 @@ func (v *Validator) getRecentCommits() (string, error) {
 // analyzeWithAI sends the prompt to the configured AI provider
 func (v *Validator) analyzeWithAI(prompt string) (string, error) {
 	return v.aiManager.AnalyzeChanges(prompt)
+}
+
+// ADRCreateResult represents the result of automatic ADR creation
+type ADRCreateResult struct {
+	Success bool
+	Message string
+}
+
+// askUserToCreateADR prompts the user to create an ADR automatically
+func (v *Validator) askUserToCreateADR(suggestedTitle, aiAnalysis string) (bool, error) {
+	var shouldCreate bool
+	
+	title := "DrDuck detected changes that need an ADR. Create one now?"
+	description := "This will run 'drduck complete-adr --create' automatically using AI assistance."
+	
+	if suggestedTitle != "" {
+		description += fmt.Sprintf("\nSuggested title: %s", suggestedTitle)
+	}
+	
+	form := huh.NewConfirm().
+		Title(title).
+		Description(description).
+		Value(&shouldCreate).
+		Affirmative("Yes, create ADR now").
+		Negative("No, I'll handle it manually")
+
+	err := form.Run()
+	if err != nil {
+		return false, err
+	}
+
+	return shouldCreate, nil
+}
+
+// runCompleteADRCreate executes the complete-adr --create command
+func (v *Validator) runCompleteADRCreate() ADRCreateResult {
+	// Import the complete-adr functionality
+	// We'll use os/exec to call the drduck command to avoid circular imports
+	cmd := exec.Command("drduck", "complete-adr", "--create")
+	
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return ADRCreateResult{
+			Success: false,
+			Message: fmt.Sprintf("Command failed: %v\nOutput: %s", err, string(output)),
+		}
+	}
+
+	return ADRCreateResult{
+		Success: true,
+		Message: string(output),
+	}
 }
