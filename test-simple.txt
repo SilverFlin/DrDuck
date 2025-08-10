@@ -1,2 +1,0 @@
-This is a simple text file for testing the pre-push AI analysis.
-It should not require an ADR since it's just documentation.
