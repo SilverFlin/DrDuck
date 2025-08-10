@@ -35,11 +35,12 @@ func ChangeAnalysisPrompt(projectName, changes, recentCommits string) string {
 	promptBuilder.WriteString("\n```\n\n")
 	
 	promptBuilder.WriteString("## Analysis Required\n")
-	promptBuilder.WriteString("Please analyze these changes and provide your assessment following your standard response format:\n")
-	promptBuilder.WriteString("- **Decision**: Does this require an ADR? (Yes/No)\n")
-	promptBuilder.WriteString("- **Reasoning**: Brief explanation of why/why not\n")
-	promptBuilder.WriteString("- **Suggested ADR Title**: If yes, propose a specific title\n")
-	promptBuilder.WriteString("- **Key Points**: If yes, 2-3 bullet points of what the ADR should cover\n\n")
+	promptBuilder.WriteString("Please analyze these changes and provide your assessment in EXACTLY this format:\n\n")
+	promptBuilder.WriteString("**Decision**: Yes OR No\n")
+	promptBuilder.WriteString("**Reasoning**: Brief explanation of why/why not\n")
+	promptBuilder.WriteString("**Suggested ADR Title**: If yes, propose a specific title in kebab-case\n")
+	promptBuilder.WriteString("**Key Points**: If yes, 2-3 bullet points of what the ADR should cover\n\n")
+	promptBuilder.WriteString("IMPORTANT: Start your response with exactly '**Decision**: Yes' or '**Decision**: No'\n\n")
 	
 	promptBuilder.WriteString("Focus on architectural significance rather than implementation details. ")
 	promptBuilder.WriteString("Consider the long-term impact on the codebase, team understanding, and future maintainability.")

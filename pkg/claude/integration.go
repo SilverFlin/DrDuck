@@ -135,8 +135,8 @@ func (i *Integration) AnalyzeChanges(prompt string) (string, error) {
 		return "", fmt.Errorf("claude command not available")
 	}
 
-	// Use claude command with --print flag for non-interactive analysis
-	cmd := exec.Command("claude", "--print", prompt)
+	// Use claude command with -p flag for non-interactive analysis
+	cmd := exec.Command("claude", "-p", prompt)
 	
 	output, err := cmd.Output()
 	if err != nil {

@@ -235,9 +235,11 @@ func (v *Validator) analyzeChangesForADR() (needsADR bool, aiResponse string, su
 	}
 
 	// Parse AI response to determine if ADR is needed
-	// For now, we'll do simple parsing - this could be enhanced
-	needsADR = strings.Contains(strings.ToLower(response), "decision: yes") ||
-		strings.Contains(strings.ToLower(response), "**decision**: yes")
+	// Look for the structured response format from our prompt
+	responseLower := strings.ToLower(response)
+	needsADR = strings.Contains(responseLower, "**decision**: yes") ||
+		strings.Contains(responseLower, "decision**: yes") ||
+		strings.Contains(responseLower, "decision: yes")
 
 	// Try to extract suggested title (simple regex parsing)
 	if needsADR {
