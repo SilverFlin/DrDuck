@@ -89,11 +89,17 @@ test.yaml
 site/
 docs/_build/
 
-# Node.js (in case we add any JS tooling later)
+# Node.js / npm
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+package-lock.json
+*.tgz
+
+# npm binary directory (populated during install)
+bin/drduck*
+temp/
 
 # Python (in case we add any Python scripts)
 __pycache__/

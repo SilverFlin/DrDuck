@@ -1,0 +1,53 @@
+{
+  "name": "drduck",
+  "version": "0.1.0",
+  "description": "DocOps CLI tool for automated documentation workflows with AI integration",
+  "main": "bin/drduck",
+  "bin": {
+    "drduck": "./bin/drduck"
+  },
+  "scripts": {
+    "preinstall": "node scripts/install.js",
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SilverFlin/DrDuck.git"
+  },
+  "keywords": [
+    "documentation",
+    "docops",
+    "adr",
+    "architecture",
+    "decision-records",
+    "cli",
+    "ai",
+    "claude",
+    "cursor"
+  ],
+  "author": "SilverFlin",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/SilverFlin/DrDuck/issues"
+  },
+  "homepage": "https://github.com/SilverFlin/DrDuck#readme",
+  "engines": {
+    "node": ">=14"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64",
+    "ia32"
+  ],
+  "files": [
+    "bin/",
+    "scripts/",
+    "README.md",
+    "LICENSE"
+  ]
+}
