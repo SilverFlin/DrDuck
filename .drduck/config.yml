@@ -29,3 +29,22 @@ ai_settings:
         - comment
         - log message
         - debug
+cache:
+    max_age_days: 7
+    max_entries: 100
+    exclude_files:
+        - '*.md'
+        - '*.txt'
+        - '*.rst'
+        - '**/docs/**'
+        - '**/documentation/**'
+        - '**/.drduck/**'
+        - '**/.git/**'
+    include_files: []
+    adr_dirs:
+        - docs/adr
+        - docs/adrs
+        - architecture/decisions
+        - doc/adr
+        - adr
+    cleanup_after: 1

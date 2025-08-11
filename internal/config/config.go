@@ -16,6 +16,7 @@ type Config struct {
 	DocPath         string       `yaml:"doc_path"`
 	SeparateRepoURL string       `yaml:"separate_repo_url,omitempty"`
 	AISettings      AISettings   `yaml:"ai_settings"`
+	Cache           CacheConfig  `yaml:"cache"`
 }
 
 type HooksConfig struct {
@@ -29,6 +30,15 @@ type AISettings struct {
 	IgnorePatterns    []string `yaml:"ignore_patterns,omitempty"`
 	RequireADRFor     []string `yaml:"require_adr_for,omitempty"`
 	NeverRequireADRFor []string `yaml:"never_require_adr_for,omitempty"`
+}
+
+type CacheConfig struct {
+	MaxAge       int      `yaml:"max_age_days"`    // Days to keep cache entries
+	MaxEntries   int      `yaml:"max_entries"`     // Maximum number of cache entries
+	ExcludeFiles []string `yaml:"exclude_files"`   // File patterns to exclude from fingerprinting
+	IncludeFiles []string `yaml:"include_files"`   // File patterns to include (empty = all)
+	ADRDirs      []string `yaml:"adr_dirs"`        // ADR directories to exclude from analysis
+	CleanupAfter int      `yaml:"cleanup_after"`   // Days between automatic cleanup
 }
 
 const (
@@ -75,6 +85,28 @@ func DefaultConfig() *Config {
 				"log message",
 				"debug",
 			},
+		},
+		Cache: CacheConfig{
+			MaxAge:     7,  // Keep cache entries for 7 days
+			MaxEntries: 100, // Keep max 100 entries
+			ExcludeFiles: []string{
+				"*.md",
+				"*.txt", 
+				"*.rst",
+				"**/docs/**",
+				"**/documentation/**",
+				"**/.drduck/**",
+				"**/.git/**",
+			},
+			IncludeFiles: []string{}, // Include all files not explicitly excluded
+			ADRDirs: []string{
+				"docs/adr",
+				"docs/adrs", 
+				"architecture/decisions",
+				"doc/adr",
+				"adr",
+			},
+			CleanupAfter: 1, // Clean up daily
 		},
 	}
 }

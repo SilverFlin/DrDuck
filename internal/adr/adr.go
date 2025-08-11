@@ -481,3 +481,8 @@ func (m *Manager) GetStatusCounts() (map[Status]int, error) {
 
 	return counts, nil
 }
+
+// GenerateFromTemplate generates content for an ADR using the configured template
+func (m *Manager) GenerateFromTemplate(adr *ADR) (string, error) {
+	return m.generateFromTemplate(adr)
+}

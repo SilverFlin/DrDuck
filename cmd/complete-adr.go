@@ -11,10 +11,12 @@ import (
 
 	"github.com/SilverFlin/DrDuck/internal/adr"
 	"github.com/SilverFlin/DrDuck/internal/ai"
+	"github.com/SilverFlin/DrDuck/internal/cache"
 	"github.com/SilverFlin/DrDuck/internal/config"
 	"github.com/SilverFlin/DrDuck/internal/prompts/templates"
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v2"
 )
 
 var createNewADR bool
@@ -72,18 +74,20 @@ func runCompleteADR(cmd *cobra.Command, args []string) error {
 	// Create managers
 	adrManager := adr.NewManager(cfg)
 	aiManager := ai.NewManager(cfg)
+	cacheManager := cache.NewManagerFromMainConfig(cfg.Cache)
 
 	fmt.Println("🦆 Welcome to AI-Assisted ADR Completion!")
 	fmt.Println("=====================================")
 	fmt.Println()
 
 	var targetADR *adr.ADR
+	var totalTokenUsage ai.TokenUsage
 	var isNewADR bool
 
 	if createNewADR {
 		// Create new ADR workflow
 		fmt.Println("📝 Creating a new ADR based on your recent changes...")
-		targetADR, err = createNewADRFromChanges(adrManager, aiManager)
+		targetADR, err = createNewADRFromChanges(adrManager, aiManager, cacheManager)
 		if err != nil {
 			return fmt.Errorf("failed to create new ADR: %w", err)
 		}
@@ -109,7 +113,7 @@ func runCompleteADR(cmd *cobra.Command, args []string) error {
 
 	// Step 1: Analyze current changes
 	fmt.Println("🔍 Step 1: Analyzing your code changes...")
-	changes, changeAnalysis, err := analyzeRecentChanges(aiManager)
+	changes, changeAnalysis, analysisTokenUsage, err := analyzeRecentChanges(aiManager, cacheManager)
 	if err != nil {
 		fmt.Printf("⚠️  Could not analyze changes: %v\n", err)
 		fmt.Println("Continuing with manual input...")
@@ -117,6 +121,11 @@ func runCompleteADR(cmd *cobra.Command, args []string) error {
 		changeAnalysis = ""
 	} else {
 		fmt.Println("✅ Change analysis completed")
+		if analysisTokenUsage != nil {
+			totalTokenUsage.InputTokens += analysisTokenUsage.InputTokens
+			totalTokenUsage.OutputTokens += analysisTokenUsage.OutputTokens
+			totalTokenUsage.TotalTokens += analysisTokenUsage.TotalTokens
+		}
 		if changeAnalysis != "" {
 			fmt.Println("\n🤖 AI Analysis of Changes:")
 			fmt.Println("---")
@@ -145,9 +154,16 @@ func runCompleteADR(cmd *cobra.Command, args []string) error {
 
 	// Step 3: Generate ADR content using AI
 	fmt.Println("\n🤖 Step 3: Generating ADR content with AI...")
-	generatedContent, err := generateADRContent(aiManager, targetADR, changes, changeAnalysis, responses)
+	generatedContent, contentTokenUsage, err := generateADRContent(aiManager, targetADR, changes, changeAnalysis, responses)
 	if err != nil {
 		return fmt.Errorf("failed to generate ADR content: %w", err)
+	}
+	if contentTokenUsage != nil {
+		fmt.Printf("📊 Content Generation Token Usage: %d input + %d output = %d total tokens\n", 
+			contentTokenUsage.InputTokens, contentTokenUsage.OutputTokens, contentTokenUsage.TotalTokens)
+		totalTokenUsage.InputTokens += contentTokenUsage.InputTokens
+		totalTokenUsage.OutputTokens += contentTokenUsage.OutputTokens
+		totalTokenUsage.TotalTokens += contentTokenUsage.TotalTokens
 	}
 
 	// Step 4: Preview and confirm
@@ -173,22 +189,35 @@ func runCompleteADR(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("status update failed: %w", err)
 	}
 
-	// Step 7: Ask about title confirmation for new ADRs
-	if isNewADR {
-		if err := handleTitleConfirmation(adrManager, targetADR); err != nil {
-			return fmt.Errorf("title confirmation failed: %w", err)
-		}
-	}
+	// Title confirmation is now handled during ADR creation for new ADRs
 
 	fmt.Println("\n🎉 ADR completion successful!")
 	fmt.Printf("📄 File: %s\n", targetADR.FilePath)
 	fmt.Println("💡 Your changes should now pass the pre-push hook")
+	
+	// Mark changes as resolved in cache (only for accepted/superseded status)
+	if targetADR.Status == adr.StatusAccepted || targetADR.Status == adr.StatusSuperseded {
+		if err := cacheManager.MarkResolved(targetADR.ID); err != nil {
+			// Don't fail the whole operation if cache marking fails
+			fmt.Printf("⚠️  Note: Could not mark changes as resolved in cache: %v\n", err)
+		} else {
+			fmt.Println("✅ Changes marked as resolved - future pushes won't re-analyze these changes")
+		}
+	}
+	
+	// Display total token usage summary if any AI calls were made
+	if totalTokenUsage.TotalTokens > 0 {
+		fmt.Println("\n📊 Total AI Token Usage Summary:")
+		fmt.Printf("   Input tokens:  %d\n", totalTokenUsage.InputTokens)
+		fmt.Printf("   Output tokens: %d\n", totalTokenUsage.OutputTokens)
+		fmt.Printf("   Total tokens:  %d\n", totalTokenUsage.TotalTokens)
+	}
 
 	return nil
 }
 
 // createNewADRFromChanges creates a new ADR with AI-suggested title
-func createNewADRFromChanges(adrManager *adr.Manager, aiManager *ai.Manager) (*adr.ADR, error) {
+func createNewADRFromChanges(adrManager *adr.Manager, aiManager *ai.Manager, cacheManager *cache.Manager) (*adr.ADR, error) {
 	// Get git changes to suggest title
 	changes, err := getGitChangesSummary()
 	if err != nil {
@@ -198,46 +227,212 @@ func createNewADRFromChanges(adrManager *adr.Manager, aiManager *ai.Manager) (*a
 	// Use AI to suggest title
 	suggestedTitle := "recent-architectural-changes"
 	if aiManager.IsAvailable() && changes != "" {
-		prompt := fmt.Sprintf("Based on these git changes, suggest a concise ADR title (2-4 words, kebab-case):\n\n%s", changes)
+		prompt := fmt.Sprintf("Based on these git changes, suggest a concise ADR title in kebab-case format (2-4 words). Respond with just the title, nothing else:\n\n%s", changes)
 		response, err := aiManager.AnalyzeChanges(prompt)
-		if err == nil && strings.Contains(response, "title") {
-			// Extract title from response (simple parsing)
-			lines := strings.Split(response, "\n")
-			for _, line := range lines {
-				if strings.Contains(strings.ToLower(line), "title") && strings.Contains(line, ":") {
-					parts := strings.Split(line, ":")
-					if len(parts) > 1 {
-						title := strings.TrimSpace(parts[1])
-						title = strings.Trim(title, "\"'`")
-						if title != "" {
-							suggestedTitle = title
-							break
-						}
-					}
-				}
+		if err == nil && response != "" {
+			extractedTitle := extractTitleFromResponse(response)
+			if extractedTitle != "" {
+				suggestedTitle = extractedTitle
 			}
 		}
 	}
 
-	// Create the ADR
-	return adrManager.Create(suggestedTitle)
+	// Ask user to confirm or change the suggested title before creating the ADR
+	finalTitle, err := confirmOrChangeTitle(suggestedTitle)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get title confirmation: %w", err)
+	}
+
+	// Create the ADR with the confirmed title
+	return adrManager.Create(finalTitle)
+}
+
+// confirmOrChangeTitle asks user to confirm or change the suggested title
+func confirmOrChangeTitle(suggestedTitle string) (string, error) {
+	var keepTitle bool
+	
+	prompt := fmt.Sprintf("Use suggested title '%s'?", suggestedTitle)
+	
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title(prompt).
+				Affirmative("Yes, use it").
+				Negative("No, change it").
+				Value(&keepTitle),
+		),
+	)
+	
+	if err := form.Run(); err != nil {
+		return "", fmt.Errorf("failed to get title confirmation: %w", err)
+	}
+	
+	if keepTitle {
+		return suggestedTitle, nil
+	}
+	
+	// User wants to change the title
+	var newTitle string
+	newTitleForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Enter ADR title:").
+				Placeholder("e.g., api-versioning-strategy").
+				Value(&newTitle).
+				Validate(func(str string) error {
+					if strings.TrimSpace(str) == "" {
+						return fmt.Errorf("title cannot be empty")
+					}
+					return nil
+				}),
+		),
+	)
+	
+	if err := newTitleForm.Run(); err != nil {
+		return "", fmt.Errorf("failed to get new title: %w", err)
+	}
+	
+	return strings.TrimSpace(newTitle), nil
+}
+
+// extractTitleFromResponse extracts a title from various AI response formats
+func extractTitleFromResponse(response string) string {
+	response = strings.TrimSpace(response)
+	if response == "" {
+		return ""
+	}
+
+	// Try different extraction patterns
+	lines := strings.Split(response, "\n")
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		
+		// Pattern 1: "Title: some-title" or "title: some-title"
+		if strings.Contains(strings.ToLower(line), "title:") {
+			parts := strings.Split(line, ":")
+			if len(parts) > 1 {
+				title := strings.TrimSpace(parts[1])
+				title = strings.Trim(title, "\"'`")
+				if isValidTitle(title) {
+					return title
+				}
+			}
+		}
+		
+		// Pattern 2: Just the title on its own line (most common for simple prompts)
+		if isValidTitle(line) {
+			return line
+		}
+		
+		// Pattern 3: Title in quotes
+		if strings.HasPrefix(line, "\"") && strings.HasSuffix(line, "\"") {
+			title := strings.Trim(line, "\"")
+			if isValidTitle(title) {
+				return title
+			}
+		}
+		
+		// Pattern 4: Title after "Suggested title:" or similar
+		lowerLine := strings.ToLower(line)
+		if strings.Contains(lowerLine, "suggest") && strings.Contains(lowerLine, ":") {
+			parts := strings.Split(line, ":")
+			if len(parts) > 1 {
+				title := strings.TrimSpace(parts[1])
+				title = strings.Trim(title, "\"'`")
+				if isValidTitle(title) {
+					return title
+				}
+			}
+		}
+	}
+	
+	// If no pattern matches, try the first non-empty line as fallback
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.Contains(strings.ToLower(line), "based on") && 
+		   !strings.Contains(strings.ToLower(line), "here") {
+			// Clean up common prefixes/suffixes
+			line = strings.TrimPrefix(line, "- ")
+			line = strings.TrimPrefix(line, "* ")
+			line = strings.Trim(line, "\"'`")
+			if isValidTitle(line) {
+				return line
+			}
+		}
+	}
+	
+	return ""
+}
+
+// isValidTitle checks if a string looks like a valid ADR title
+func isValidTitle(title string) bool {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return false
+	}
+	
+	// Should be reasonable length
+	if len(title) > 50 || len(title) < 3 {
+		return false
+	}
+	
+	// Shouldn't contain sentence indicators
+	if strings.Contains(title, ".") || strings.Contains(title, "!") || 
+	   strings.Contains(title, "?") {
+		return false
+	}
+	
+	// Shouldn't be a sentence (no "the", "this", "we", etc. at start)
+	lowerTitle := strings.ToLower(title)
+	badStarts := []string{"the ", "this ", "we ", "you ", "i ", "here ", "based "}
+	for _, badStart := range badStarts {
+		if strings.HasPrefix(lowerTitle, badStart) {
+			return false
+		}
+	}
+	
+	return true
 }
 
 // analyzeRecentChanges gets git changes and AI analysis with timeout protection
-func analyzeRecentChanges(aiManager *ai.Manager) (changes string, analysis string, err error) {
+func analyzeRecentChanges(aiManager *ai.Manager, cacheManager *cache.Manager) (changes string, analysis string, tokenUsage *ai.TokenUsage, err error) {
+	// First check if we have cached analysis for current changes
+	if cacheManager != nil {
+		cachedAnalysis, found, cacheErr := cacheManager.GetAnalysis()
+		if cacheErr == nil && found && cachedAnalysis != nil {
+			fmt.Println("📋 Using cached analysis from previous run...")
+			
+			// Get basic change summary for display
+			changes, _ = getGitChangesSummary()
+			if changes == "" {
+				changes = "Changes analyzed (cached result)"
+			}
+			
+			analysis = fmt.Sprintf("%s\n\n(Cached analysis from %s)",
+				cachedAnalysis.Suggestion,
+				cachedAnalysis.Timestamp.Format("2006-01-02 15:04:05"))
+			
+			return changes, analysis, nil, nil
+		}
+	}
+
 	// Get basic changes summary first (fast)
 	changes, err = getGitChangesSummary()
 	if err != nil {
 		changes = "Could not detect git changes - proceeding with manual input"
-		return changes, "Git analysis unavailable", nil
+		return changes, "Git analysis unavailable", nil, nil
 	}
 
 	if changes == "" || changes == "No git changes detected" {
-		return changes, "No significant changes detected", nil
+		return changes, "No significant changes detected", nil, nil
 	}
 
 	if !aiManager.IsAvailable() {
-		return changes, "AI analysis not available - using change detection only", nil
+		return changes, "AI analysis not available - using change detection only", nil, nil
 	}
 
 	// Try to get detailed changes for AI analysis (may be large)
@@ -266,7 +461,7 @@ func analyzeRecentChanges(aiManager *ai.Manager) (changes string, analysis strin
 
 	// Run AI analysis with timeout protection
 	fmt.Print("Running AI analysis... ")
-	analysis, err = analyzeWithTimeout(aiManager, promptChanges, 30*time.Second)
+	analysis, tokenUsage, err = analyzeWithTimeout(aiManager, promptChanges, 30*time.Second)
 	if err != nil {
 		fmt.Printf("failed (%v), using fallback\n", err)
 		// Provide intelligent fallback analysis based on change patterns
@@ -274,16 +469,21 @@ func analyzeRecentChanges(aiManager *ai.Manager) (changes string, analysis strin
 		err = nil // Clear error so workflow continues
 	} else {
 		fmt.Println("completed")
+		if tokenUsage != nil {
+			fmt.Printf("📊 AI Analysis Token Usage: %d input + %d output = %d total tokens\n", 
+				tokenUsage.InputTokens, tokenUsage.OutputTokens, tokenUsage.TotalTokens)
+		}
 	}
 	
-	return changes, analysis, err
+	return changes, analysis, tokenUsage, err
 }
 
-// analyzeWithTimeout runs AI analysis with a timeout
-func analyzeWithTimeout(aiManager *ai.Manager, changes string, timeout time.Duration) (string, error) {
+// analyzeWithTimeout runs AI analysis with a timeout and returns token usage
+func analyzeWithTimeout(aiManager *ai.Manager, changes string, timeout time.Duration) (string, *ai.TokenUsage, error) {
 	type result struct {
-		analysis string
-		err      error
+		analysis   string
+		tokenUsage *ai.TokenUsage
+		err        error
 	}
 
 	// Create channel for result
@@ -292,16 +492,22 @@ func analyzeWithTimeout(aiManager *ai.Manager, changes string, timeout time.Dura
 	// Run analysis in goroutine
 	go func() {
 		prompt := templates.ChangeAnalysisPrompt("", changes, "")
-		analysis, err := aiManager.AnalyzeChanges(prompt)
-		resultChan <- result{analysis, err}
+		analyzeResult, err := aiManager.AnalyzeChangesWithTokens(prompt)
+		if err != nil {
+			// Fallback to regular analysis
+			analysis, fallbackErr := aiManager.AnalyzeChanges(prompt)
+			resultChan <- result{analysis, nil, fallbackErr}
+		} else {
+			resultChan <- result{analyzeResult.Response, &analyzeResult.TokenUsage, nil}
+		}
 	}()
 
 	// Wait for result or timeout
 	select {
 	case res := <-resultChan:
-		return res.analysis, res.err
+		return res.analysis, res.tokenUsage, res.err
 	case <-time.After(timeout):
-		return "", fmt.Errorf("AI analysis timed out after %v", timeout)
+		return "", nil, fmt.Errorf("AI analysis timed out after %v", timeout)
 	}
 }
 
@@ -423,21 +629,15 @@ func getChangesSinceLastPush() (string, error) {
 	}
 	branch := strings.TrimSpace(string(branchOutput))
 
-	// Try to get diff against origin (multiple commits)
+	// Always try to get diff against origin first
 	remoteBranch := fmt.Sprintf("origin/%s", branch)
 	diffCmd := exec.Command("git", "diff", remoteBranch+"..HEAD", "--stat")
 	output, err := diffCmd.Output()
 	
-	// If no remote, try to get last 3 commits
+	// Only if no remote branch exists, fallback to last 3 commits
 	if err != nil {
 		diffCmd = exec.Command("git", "diff", "HEAD~3..HEAD", "--stat")
 		output, err = diffCmd.Output()
-		
-		// If still no luck, get all staged and unstaged changes
-		if err != nil {
-			diffCmd = exec.Command("git", "diff", "HEAD", "--stat")
-			output, err = diffCmd.Output()
-		}
 	}
 
 	return string(output), err
@@ -452,25 +652,29 @@ const (
 
 // getDetailedChanges gets actual code changes (not just stats) with size limits
 func getDetailedChanges() (string, bool, error) {
-	// Try to get actual diff content (not just stats) with limits
-	changes, err := getChangesSinceLastPush()
-	if err != nil || strings.TrimSpace(changes) == "" {
-		// Fallback to working directory changes
-		cmd := exec.Command("git", "diff")
-		output, err := cmd.Output()
-		if err == nil && len(strings.TrimSpace(string(output))) > 0 {
+	// Get current branch
+	branchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	branchOutput, err := branchCmd.Output()
+	if err != nil {
+		return "", false, fmt.Errorf("failed to get current branch: %w", err)
+	}
+	branch := strings.TrimSpace(string(branchOutput))
+
+	// Try to get full diff content against origin
+	remoteBranch := fmt.Sprintf("origin/%s", branch)
+	cmd := exec.Command("git", "diff", remoteBranch+"..HEAD")
+	output, err := cmd.Output()
+	
+	var changes string
+	if err != nil {
+		// Fallback to last 3 commits if no remote
+		cmd = exec.Command("git", "diff", "HEAD~3..HEAD")
+		output, err = cmd.Output()
+		if err == nil {
 			changes = string(output)
 		}
 	} else {
-		// Get full diff content for the range
-		remoteBranch, err := getCurrentRemoteBranch()
-		if err == nil {
-			cmd := exec.Command("git", "diff", remoteBranch+"..HEAD")
-			output, err := cmd.Output()
-			if err == nil {
-				changes = string(output)
-			}
-		}
+		changes = string(output)
 	}
 
 	if strings.TrimSpace(changes) == "" {
@@ -801,24 +1005,26 @@ func getContextualQuestions(title, analysis string) ContextualQuestions {
 	}
 }
 
-// generateADRContent uses AI to create complete ADR content
-func generateADRContent(aiManager *ai.Manager, targetADR *adr.ADR, changes, changeAnalysis string, responses *QuestionnaireResponse) (string, error) {
+// generateADRContent uses AI to create complete ADR content and tracks token usage
+func generateADRContent(aiManager *ai.Manager, targetADR *adr.ADR, changes, changeAnalysis string, responses *QuestionnaireResponse) (string, *ai.TokenUsage, error) {
 	if !aiManager.IsAvailable() {
-		return generateFallbackContent(targetADR, responses), nil
+		cfg, _ := config.Load() // Load config for template system
+		return generateFallbackContent(targetADR, responses, cfg), nil, nil
 	}
 
 	// Create comprehensive prompt combining all information
 	prompt := createComprehensiveADRPrompt(targetADR, changes, changeAnalysis, responses)
 
-	// Get AI-generated content
-	content, err := aiManager.AnalyzeChanges(prompt)
+	// Get AI-generated content with token tracking
+	result, err := aiManager.AnalyzeChangesWithTokens(prompt)
 	if err != nil {
 		fmt.Printf("⚠️  AI generation failed, using fallback: %v\n", err)
-		return generateFallbackContent(targetADR, responses), nil
+		cfg, _ := config.Load() // Load config for template system
+		return generateFallbackContent(targetADR, responses, cfg), nil, nil
 	}
 
 	// Clean up and format the AI response
-	return formatGeneratedContent(content, targetADR), nil
+	return formatGeneratedContent(result.Response, targetADR), &result.TokenUsage, nil
 }
 
 // createComprehensiveADRPrompt builds a detailed prompt for AI content generation
@@ -872,94 +1078,49 @@ func createComprehensiveADRPrompt(targetADR *adr.ADR, changes, changeAnalysis st
 	return promptBuilder.String()
 }
 
-// generateFallbackContent creates ADR content without AI
-func generateFallbackContent(targetADR *adr.ADR, responses *QuestionnaireResponse) string {
-	var content strings.Builder
-
-	content.WriteString(fmt.Sprintf("# %s\n\n", targetADR.Title))
-	content.WriteString(fmt.Sprintf("* **Status**: %s\n", targetADR.Status))
-	content.WriteString(fmt.Sprintf("* **Date**: %s\n\n", time.Now().Format("2006-01-02")))
-
-	content.WriteString("## Context\n\n")
-	if responses.ProblemContext != "" {
-		content.WriteString(responses.ProblemContext)
-	} else {
-		content.WriteString("<!-- Describe the problem or situation that motivated this decision -->")
+// generateFallbackContent creates ADR content using the configured template
+func generateFallbackContent(targetADR *adr.ADR, responses *QuestionnaireResponse, cfg *config.Config) string {
+	// Use the configured template system
+	manager := adr.NewManager(cfg)
+	templateContent, err := manager.GenerateFromTemplate(targetADR)
+	if err != nil {
+		// Only if template generation fails completely, create basic content
+		var content strings.Builder
+		content.WriteString(fmt.Sprintf("# %s\n\nError generating template: %v\n", targetADR.Title, err))
+		return content.String()
 	}
-	content.WriteString("\n\n")
-
-	content.WriteString("## Decision\n\n")
-	if responses.DecisionMade != "" {
-		content.WriteString(responses.DecisionMade)
-	} else {
-		content.WriteString("<!-- Describe the solution or approach that was chosen -->")
-	}
-	content.WriteString("\n\n")
-
-	content.WriteString("## Rationale\n\n")
-	if responses.WhyThisSolution != "" {
-		content.WriteString(responses.WhyThisSolution)
-	} else {
-		content.WriteString("<!-- Explain why this particular solution was selected -->")
-	}
-	content.WriteString("\n\n")
-
-	content.WriteString("## Consequences\n\n")
-	content.WriteString("### Positive\n\n")
-	if responses.TradeOffs != "" && (strings.Contains(strings.ToLower(responses.TradeOffs), "benefit") || 
-		strings.Contains(strings.ToLower(responses.TradeOffs), "positive")) {
-		content.WriteString(responses.TradeOffs)
-	} else {
-		content.WriteString("<!-- What becomes easier or better with this decision -->")
-	}
-	content.WriteString("\n\n")
-
-	content.WriteString("### Negative\n\n")
-	if responses.TradeOffs != "" {
-		content.WriteString(responses.TradeOffs)
-	} else {
-		content.WriteString("<!-- What becomes more difficult or complex -->")
-	}
-	content.WriteString("\n\n")
-
-	content.WriteString("### Neutral\n\n")
-	if responses.FutureImplications != "" {
-		content.WriteString(responses.FutureImplications)
-	} else {
-		content.WriteString("<!-- Other implications that are neither positive nor negative -->")
-	}
-	content.WriteString("\n\n")
-
-	content.WriteString("## Alternatives Considered\n\n")
-	if responses.AlternativesConsidered != "" {
-		content.WriteString(responses.AlternativesConsidered)
-	} else {
-		content.WriteString("<!-- What other options were evaluated and why they weren't chosen -->")
-	}
-	content.WriteString("\n\n")
-
-	if responses.AdditionalContext != "" {
-		content.WriteString("## Additional Notes\n\n")
-		content.WriteString(responses.AdditionalContext)
-		content.WriteString("\n\n")
-	}
-
-	content.WriteString("---\n")
-	content.WriteString(fmt.Sprintf("*ADR-%04d completed with DrDuck AI assistance on %s*\n", 
-		targetADR.ID, time.Now().Format("2006-01-02")))
-
-	return content.String()
+	
+	return templateContent
 }
 
 // formatGeneratedContent cleans up and formats AI-generated content
 func formatGeneratedContent(content string, targetADR *adr.ADR) string {
-	// If AI returned complete markdown with title, use as-is
-	if strings.HasPrefix(content, "#") {
+	// If AI returned complete markdown with front matter, use as-is
+	if strings.HasPrefix(content, "---") {
 		return content
 	}
+	
+	// If AI returned complete markdown with title but no front matter, add front matter
+	if strings.HasPrefix(content, "#") {
+		var formatted strings.Builder
+		formatted.WriteString("---\n")
+		formatted.WriteString(fmt.Sprintf("id: %d\n", targetADR.ID))
+		formatted.WriteString(fmt.Sprintf("title: \"%s\"\n", targetADR.Title))
+		formatted.WriteString(fmt.Sprintf("status: %s\n", targetADR.Status))
+		formatted.WriteString(fmt.Sprintf("date: %s\n", targetADR.Date.Format("2006-01-02")))
+		formatted.WriteString("---\n\n")
+		formatted.WriteString(content)
+		return formatted.String()
+	}
 
-	// If AI returned sections without title, add title and metadata
+	// If AI returned sections without title, add front matter, title and metadata
 	var formatted strings.Builder
+	formatted.WriteString("---\n")
+	formatted.WriteString(fmt.Sprintf("id: %d\n", targetADR.ID))
+	formatted.WriteString(fmt.Sprintf("title: \"%s\"\n", targetADR.Title))
+	formatted.WriteString(fmt.Sprintf("status: %s\n", targetADR.Status))
+	formatted.WriteString(fmt.Sprintf("date: %s\n", targetADR.Date.Format("2006-01-02")))
+	formatted.WriteString("---\n\n")
 	formatted.WriteString(fmt.Sprintf("# %s\n\n", targetADR.Title))
 	formatted.WriteString(fmt.Sprintf("* **Status**: %s\n", targetADR.Status))
 	formatted.WriteString(fmt.Sprintf("* **Date**: %s\n\n", targetADR.Date.Format("2006-01-02")))
@@ -1194,14 +1355,36 @@ func renameADRFile(adrManager *adr.Manager, targetADR *adr.ADR, newTitle string)
 	
 	// Update title in content
 	content := string(currentContent)
-	lines := strings.Split(content, "\n")
+	updatedContent := content
+	
+	// Try to update front matter title first
+	if strings.HasPrefix(content, "---\n") {
+		endIndex := strings.Index(content[4:], "\n---\n")
+		if endIndex != -1 {
+			frontMatterStr := content[4 : endIndex+4]
+			var frontMatter map[string]interface{}
+			if err := yaml.Unmarshal([]byte(frontMatterStr), &frontMatter); err == nil {
+				// Update title in front matter
+				frontMatter["title"] = newTitle
+				updatedFrontMatter, err := yaml.Marshal(frontMatter)
+				if err == nil {
+					// Replace the front matter in the content
+					restOfContent := content[endIndex+8:] // Skip "---\n" at the end
+					updatedContent = fmt.Sprintf("---\n%s---\n%s", string(updatedFrontMatter), restOfContent)
+				}
+			}
+		}
+	}
+	
+	// Also update the markdown title (for display consistency)
+	lines := strings.Split(updatedContent, "\n")
 	for i, line := range lines {
 		if strings.HasPrefix(line, "# ") {
 			lines[i] = fmt.Sprintf("# %s", newTitle)
 			break
 		}
 	}
-	updatedContent := strings.Join(lines, "\n")
+	updatedContent = strings.Join(lines, "\n")
 	
 	// Write to new file
 	if err := os.WriteFile(newFilePath, []byte(updatedContent), 0644); err != nil {

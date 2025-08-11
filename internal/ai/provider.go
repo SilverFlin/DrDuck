@@ -8,6 +8,19 @@ import (
 	"github.com/SilverFlin/DrDuck/pkg/cursor"
 )
 
+// TokenUsage tracks token consumption for AI requests
+type TokenUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
+// AnalyzeResult contains both the response and token usage information
+type AnalyzeResult struct {
+	Response    string     `json:"response"`
+	TokenUsage  TokenUsage `json:"token_usage"`
+}
+
 // Provider defines the interface for AI integrations
 type Provider interface {
 	IsAvailable() bool
@@ -15,6 +28,7 @@ type Provider interface {
 	SuggestADRContent(adrName string) (map[string]string, error)
 	ExtractContext() (string, error)
 	AnalyzeChanges(prompt string) (string, error)
+	AnalyzeChangesWithTokens(prompt string) (AnalyzeResult, error)
 }
 
 // Manager handles AI provider integration
@@ -73,6 +87,11 @@ func (m *Manager) AnalyzeChanges(prompt string) (string, error) {
 	return m.provider.AnalyzeChanges(prompt)
 }
 
+// AnalyzeChangesWithTokens sends a change analysis prompt to the AI provider and returns token usage
+func (m *Manager) AnalyzeChangesWithTokens(prompt string) (AnalyzeResult, error) {
+	return m.provider.AnalyzeChangesWithTokens(prompt)
+}
+
 // ClaudeProvider implements Provider for Claude Code CLI
 type ClaudeProvider struct {
 	integration *claude.Integration
@@ -103,6 +122,28 @@ func (p *ClaudeProvider) AnalyzeChanges(prompt string) (string, error) {
 	return p.integration.AnalyzeChanges(prompt)
 }
 
+func (p *ClaudeProvider) AnalyzeChangesWithTokens(prompt string) (AnalyzeResult, error) {
+	response, tokenUsage, err := p.integration.AnalyzeChangesWithTokens(prompt)
+	if err != nil {
+		return AnalyzeResult{}, err
+	}
+	
+	// Convert claude.TokenUsage to ai.TokenUsage
+	var aiTokenUsage TokenUsage
+	if tokenUsage != nil {
+		aiTokenUsage = TokenUsage{
+			InputTokens:  tokenUsage.InputTokens,
+			OutputTokens: tokenUsage.OutputTokens,
+			TotalTokens:  tokenUsage.TotalTokens,
+		}
+	}
+	
+	return AnalyzeResult{
+		Response:   response,
+		TokenUsage: aiTokenUsage,
+	}, nil
+}
+
 // CursorProvider implements Provider for Cursor
 type CursorProvider struct {
 	integration *cursor.Integration
@@ -131,4 +172,26 @@ func (p *CursorProvider) ExtractContext() (string, error) {
 
 func (p *CursorProvider) AnalyzeChanges(prompt string) (string, error) {
 	return p.integration.AnalyzeChanges(prompt)
+}
+
+func (p *CursorProvider) AnalyzeChangesWithTokens(prompt string) (AnalyzeResult, error) {
+	response, tokenUsage, err := p.integration.AnalyzeChangesWithTokens(prompt)
+	if err != nil {
+		return AnalyzeResult{}, err
+	}
+	
+	// Convert cursor.TokenUsage to ai.TokenUsage
+	var aiTokenUsage TokenUsage
+	if tokenUsage != nil {
+		aiTokenUsage = TokenUsage{
+			InputTokens:  tokenUsage.InputTokens,
+			OutputTokens: tokenUsage.OutputTokens,
+			TotalTokens:  tokenUsage.TotalTokens,
+		}
+	}
+	
+	return AnalyzeResult{
+		Response:   response,
+		TokenUsage: aiTokenUsage,
+	}, nil
 }

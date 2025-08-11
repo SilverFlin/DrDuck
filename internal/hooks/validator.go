@@ -8,6 +8,7 @@ import (
 
 	"github.com/SilverFlin/DrDuck/internal/adr"
 	"github.com/SilverFlin/DrDuck/internal/ai"
+	"github.com/SilverFlin/DrDuck/internal/cache"
 	"github.com/SilverFlin/DrDuck/internal/config"
 	"github.com/SilverFlin/DrDuck/internal/prompts/templates"
 	"github.com/charmbracelet/huh"
@@ -25,17 +26,19 @@ type ValidationResult struct {
 
 // Validator handles git hook validation logic
 type Validator struct {
-	config     *config.Config
-	adrManager *adr.Manager
-	aiManager  *ai.Manager
+	config       *config.Config
+	adrManager   *adr.Manager
+	aiManager    *ai.Manager
+	cacheManager *cache.Manager
 }
 
 // NewValidator creates a new hook validator
 func NewValidator(cfg *config.Config) *Validator {
 	return &Validator{
-		config:     cfg,
-		adrManager: adr.NewManager(cfg),
-		aiManager:  ai.NewManager(cfg),
+		config:       cfg,
+		adrManager:   adr.NewManager(cfg),
+		aiManager:    ai.NewManager(cfg),
+		cacheManager: cache.NewManagerFromMainConfig(cfg.Cache),
 	}
 }
 
@@ -212,6 +215,19 @@ func (v *Validator) getDraftADRs() ([]*adr.ADR, error) {
 
 // analyzeChangesForADR uses AI to determine if the current changes require an ADR
 func (v *Validator) analyzeChangesForADR() (needsADR bool, aiResponse string, suggestedTitle string, err error) {
+	// First, check if we have a cached analysis for these changes
+	cachedAnalysis, found, cacheErr := v.cacheManager.GetAnalysis()
+	if cacheErr == nil && found && cachedAnalysis != nil {
+		// Use cached analysis
+		needsADR = cachedAnalysis.Decision == "yes"
+		aiResponse = fmt.Sprintf("%s\n\n(Cached analysis from %s)", 
+			cachedAnalysis.Suggestion, 
+			cachedAnalysis.Timestamp.Format("2006-01-02 15:04:05"))
+		suggestedTitle = cachedAnalysis.Title
+		return needsADR, aiResponse, suggestedTitle, nil
+	}
+
+	// No cached result, proceed with AI analysis
 	// Check if AI provider is available
 	if !v.aiManager.IsAvailable() {
 		return false, "", "", fmt.Errorf("AI provider (%s) not available", v.aiManager.GetProviderName())
@@ -237,26 +253,24 @@ func (v *Validator) analyzeChangesForADR() (needsADR bool, aiResponse string, su
 	// Generate analysis prompt
 	prompt := templates.ChangeAnalysisPrompt("", changes, recentCommits)
 
-	// Use AI to analyze changes (this will be implemented in the AI integration)
+	// Use AI to analyze changes
 	response, err := v.analyzeWithAI(prompt)
 	if err != nil {
 		return false, "", "", err
 	}
 
 	// Parse AI response to determine if ADR is needed
-	// Look for the structured response format from our prompt
 	responseLower := strings.ToLower(response)
 	needsADR = strings.Contains(responseLower, "**decision**: yes") ||
 		strings.Contains(responseLower, "decision**: yes") ||
 		strings.Contains(responseLower, "decision: yes")
 
-	// Try to extract suggested title (simple regex parsing)
+	// Try to extract suggested title
 	if needsADR {
 		lines := strings.Split(response, "\n")
 		for _, line := range lines {
 			lower := strings.ToLower(line)
 			if strings.Contains(lower, "suggested adr title") || strings.Contains(lower, "title:") {
-				// Extract title from line - this is a simple implementation
 				if idx := strings.Index(lower, ":"); idx != -1 && idx+1 < len(line) {
 					title := strings.TrimSpace(line[idx+1:])
 					title = strings.Trim(title, "\"'`")
@@ -267,6 +281,17 @@ func (v *Validator) analyzeChangesForADR() (needsADR bool, aiResponse string, su
 				}
 			}
 		}
+	}
+
+	// Cache the analysis result
+	decision := "no"
+	if needsADR {
+		decision = "yes"
+	}
+	
+	if cacheErr := v.cacheManager.StoreAnalysis(decision, response, suggestedTitle); cacheErr != nil {
+		// Don't fail if we can't cache, just log it (we could add logging here)
+		// Log: fmt.Printf("Warning: failed to cache analysis: %v\n", cacheErr)
 	}
 
 	return needsADR, response, suggestedTitle, nil

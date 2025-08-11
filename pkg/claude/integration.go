@@ -1,12 +1,27 @@
 package claude
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+// TokenUsage tracks token consumption for AI requests
+type TokenUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
+// AnalyzeResult contains both the response and token usage information
+type AnalyzeResult struct {
+	Response    string     `json:"response"`
+	TokenUsage  TokenUsage `json:"token_usage"`
+}
 
 // ClaudeSession represents information about a Claude Code CLI session
 type ClaudeSession struct {
@@ -150,6 +165,88 @@ func (i *Integration) AnalyzeChanges(prompt string) (string, error) {
 	}
 
 	return response, nil
+}
+
+// AnalyzeChangesWithTokens sends a prompt to Claude for change analysis and returns token usage  
+func (i *Integration) AnalyzeChangesWithTokens(prompt string) (string, *TokenUsage, error) {
+	if !i.IsAvailable() {
+		response, err := i.fallbackAnalysis(prompt)
+		if err != nil {
+			return "", nil, fmt.Errorf("claude command not available and fallback failed: %w", err)
+		}
+		// Return fallback result with estimated token usage
+		tokenUsage := &TokenUsage{
+			InputTokens:  estimateTokens(prompt),
+			OutputTokens: estimateTokens(response),
+			TotalTokens:  estimateTokens(prompt) + estimateTokens(response),
+		}
+		return response, tokenUsage, nil
+	}
+
+	// Try to use claude command with json output to capture token information
+	cmd := exec.Command("claude", "-p", prompt, "--json")
+	
+	output, err := cmd.Output()
+	if err != nil {
+		// Fallback to regular analysis if JSON mode not supported
+		response, err := i.AnalyzeChanges(prompt)
+		if err != nil {
+			return "", nil, err
+		}
+		tokenUsage := &TokenUsage{
+			InputTokens:  estimateTokens(prompt),
+			OutputTokens: estimateTokens(response),
+			TotalTokens:  estimateTokens(prompt) + estimateTokens(response),
+		}
+		return response, tokenUsage, nil
+	}
+
+	// Try to parse JSON response for token information
+	var result struct {
+		Response string `json:"response"`
+		Usage    struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+
+	if err := json.Unmarshal(output, &result); err != nil {
+		// If JSON parsing fails, treat output as plain text response
+		response := strings.TrimSpace(string(output))
+		if response == "" {
+			fallbackResponse, err := i.fallbackAnalysis(prompt)
+			if err != nil {
+				return "", nil, err
+			}
+			response = fallbackResponse
+		}
+		tokenUsage := &TokenUsage{
+			InputTokens:  estimateTokens(prompt),
+			OutputTokens: estimateTokens(response),
+			TotalTokens:  estimateTokens(prompt) + estimateTokens(response),
+		}
+		return response, tokenUsage, nil
+	}
+
+	// Return parsed result with actual token usage
+	tokenUsage := &TokenUsage{
+		InputTokens:  result.Usage.InputTokens,
+		OutputTokens: result.Usage.OutputTokens,
+		TotalTokens:  result.Usage.InputTokens + result.Usage.OutputTokens,
+	}
+	return result.Response, tokenUsage, nil
+}
+
+// estimateTokens provides a rough estimate of token count for a given text
+// Using approximately 4 characters per token as a rough estimate
+func estimateTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	// Remove common whitespace and count roughly 4 chars per token
+	cleanText := strings.ReplaceAll(text, "\n", " ")
+	cleanText = regexp.MustCompile(`\s+`).ReplaceAllString(cleanText, " ")
+	return len(strings.TrimSpace(cleanText)) / 4
 }
 
 // fallbackAnalysis provides basic heuristic analysis when AI is unavailable

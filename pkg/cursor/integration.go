@@ -8,6 +8,19 @@ import (
 	"strings"
 )
 
+// TokenUsage tracks token consumption for AI requests
+type TokenUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
+// AnalyzeResult contains both the response and token usage information
+type AnalyzeResult struct {
+	Response    string     `json:"response"`
+	TokenUsage  TokenUsage `json:"token_usage"`
+}
+
 // CursorSession represents information about a Cursor AI session
 type CursorSession struct {
 	ID        string   `json:"id"`
@@ -159,6 +172,30 @@ func (i *Integration) AnalyzeChanges(prompt string) (string, error) {
 	// We'll provide a fallback analysis similar to Claude's implementation
 	
 	return i.fallbackAnalysis(prompt)
+}
+
+// AnalyzeChangesWithTokens sends a prompt to Cursor for change analysis and returns token usage
+func (i *Integration) AnalyzeChangesWithTokens(prompt string) (string, *TokenUsage, error) {
+	response, err := i.fallbackAnalysis(prompt)
+	if err != nil {
+		return "", nil, err
+	}
+	
+	tokenUsage := &TokenUsage{
+		InputTokens:  estimateTokens(prompt),
+		OutputTokens: estimateTokens(response),
+		TotalTokens:  estimateTokens(prompt) + estimateTokens(response),
+	}
+	return response, tokenUsage, nil
+}
+
+// estimateTokens provides a rough estimate of token count for a given text
+func estimateTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	cleanText := strings.ReplaceAll(text, "\n", " ")
+	return len(strings.TrimSpace(cleanText)) / 4
 }
 
 // fallbackAnalysis provides basic heuristic analysis when AI is unavailable
