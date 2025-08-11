@@ -1,6 +1,6 @@
 {
   "name": "drduck",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "DocOps CLI tool for automated documentation workflows with AI integration",
   "main": "bin/drduck",
   "bin": {
