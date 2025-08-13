@@ -20,6 +20,8 @@ import (
 )
 
 var createNewADR bool
+var compareBranch string
+var excludePatterns []string
 
 var completeADRCmd = &cobra.Command{
 	Use:   "complete-adr [adr-id]",
@@ -28,11 +30,15 @@ var completeADRCmd = &cobra.Command{
 your code changes and asks targeted questions to generate comprehensive ADR content.
 
 Usage scenarios:
-  drduck complete-adr 0001      # Complete existing draft ADR
-  drduck complete-adr --create  # Create and complete new ADR
+  drduck complete-adr 0001                           # Complete existing draft ADR
+  drduck complete-adr --create                       # Create and complete new ADR
+  drduck complete-adr --create --compare=origin/main # Compare changes against main branch
+  drduck complete-adr 0001 --compare=develop         # Complete ADR comparing against develop
+  drduck complete-adr --create --exclude="*.html"    # Ignore all HTML files from analysis
+  drduck complete-adr --create --exclude="*.html,test/*,docs/" # Exclude multiple patterns
 
 The command will:
-1. Analyze your git changes using AI
+1. Analyze your git changes using AI (comparing against specified branch)
 2. Ask targeted questions based on change type
 3. Generate complete ADR content from your responses
 4. Preview the content and allow confirmation
@@ -52,6 +58,8 @@ The command will:
 func init() {
 	rootCmd.AddCommand(completeADRCmd)
 	completeADRCmd.Flags().BoolVar(&createNewADR, "create", false, "Create a new ADR instead of completing existing one")
+	completeADRCmd.Flags().StringVar(&compareBranch, "compare", "", "Branch to compare changes against (defaults to origin/{current-branch})")
+	completeADRCmd.Flags().StringSliceVar(&excludePatterns, "exclude", []string{}, "File patterns to exclude from analysis (e.g., '*.html', 'test/*')")
 }
 
 func runCompleteADR(cmd *cobra.Command, args []string) error {
@@ -113,7 +121,7 @@ func runCompleteADR(cmd *cobra.Command, args []string) error {
 
 	// Step 1: Analyze current changes
 	fmt.Println("🔍 Step 1: Analyzing your code changes...")
-	changes, changeAnalysis, analysisTokenUsage, err := analyzeRecentChanges(aiManager, cacheManager)
+	changes, changeAnalysis, analysisTokenUsage, err := analyzeRecentChanges(aiManager, cacheManager, compareBranch, excludePatterns)
 	if err != nil {
 		fmt.Printf("⚠️  Could not analyze changes: %v\n", err)
 		fmt.Println("Continuing with manual input...")
@@ -219,7 +227,7 @@ func runCompleteADR(cmd *cobra.Command, args []string) error {
 // createNewADRFromChanges creates a new ADR with AI-suggested title
 func createNewADRFromChanges(adrManager *adr.Manager, aiManager *ai.Manager, cacheManager *cache.Manager) (*adr.ADR, error) {
 	// Get git changes to suggest title
-	changes, err := getGitChangesSummary()
+	changes, err := getGitChangesSummary(compareBranch, excludePatterns)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get git changes: %w", err)
 	}
@@ -399,7 +407,7 @@ func isValidTitle(title string) bool {
 }
 
 // analyzeRecentChanges gets git changes and AI analysis with timeout protection
-func analyzeRecentChanges(aiManager *ai.Manager, cacheManager *cache.Manager) (changes string, analysis string, tokenUsage *ai.TokenUsage, err error) {
+func analyzeRecentChanges(aiManager *ai.Manager, cacheManager *cache.Manager, branchToCompare string, excludePatterns []string) (changes string, analysis string, tokenUsage *ai.TokenUsage, err error) {
 	// First check if we have cached analysis for current changes
 	if cacheManager != nil {
 		cachedAnalysis, found, cacheErr := cacheManager.GetAnalysis()
@@ -407,7 +415,7 @@ func analyzeRecentChanges(aiManager *ai.Manager, cacheManager *cache.Manager) (c
 			fmt.Println("📋 Using cached analysis from previous run...")
 			
 			// Get basic change summary for display
-			changes, _ = getGitChangesSummary()
+			changes, _ = getGitChangesSummary(branchToCompare, excludePatterns)
 			if changes == "" {
 				changes = "Changes analyzed (cached result)"
 			}
@@ -421,7 +429,7 @@ func analyzeRecentChanges(aiManager *ai.Manager, cacheManager *cache.Manager) (c
 	}
 
 	// Get basic changes summary first (fast)
-	changes, err = getGitChangesSummary()
+	changes, err = getGitChangesSummary(branchToCompare, excludePatterns)
 	if err != nil {
 		changes = "Could not detect git changes - proceeding with manual input"
 		return changes, "Git analysis unavailable", nil, nil
@@ -437,7 +445,7 @@ func analyzeRecentChanges(aiManager *ai.Manager, cacheManager *cache.Manager) (c
 
 	// Try to get detailed changes for AI analysis (may be large)
 	fmt.Print("Getting detailed changes for AI analysis... ")
-	detailedChanges, wasTruncated, err := getDetailedChanges()
+	detailedChanges, wasTruncated, err := getDetailedChanges(branchToCompare, excludePatterns)
 	if err != nil {
 		fmt.Println("failed, using summary")
 		detailedChanges = changes // Fallback to summary
@@ -578,9 +586,9 @@ func generateFallbackAnalysis(changes string, wasTruncated bool) string {
 }
 
 // getGitChangesSummary gets a summary of git changes using the same logic as pre-push validation
-func getGitChangesSummary() (string, error) {
+func getGitChangesSummary(branchToCompare string, excludePatterns []string) (string, error) {
 	// First try to get changes since last push (same as pre-push hook)
-	changes, err := getChangesSinceLastPush()
+	changes, err := getChangesSinceLastPush(branchToCompare, excludePatterns)
 	if err == nil && len(strings.TrimSpace(changes)) > 0 {
 		return changes, nil
 	}
@@ -620,17 +628,24 @@ func getGitChangesSummary() (string, error) {
 }
 
 // getChangesSinceLastPush gets changes since last push (same logic as pre-push hook)
-func getChangesSinceLastPush() (string, error) {
-	// Get current branch
-	branchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-	branchOutput, err := branchCmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current branch: %w", err)
+func getChangesSinceLastPush(branchToCompare string, excludePatterns []string) (string, error) {
+	var remoteBranch string
+	
+	if branchToCompare != "" {
+		// Use the specified branch for comparison
+		remoteBranch = branchToCompare
+	} else {
+		// Get current branch and use origin/{current-branch} as default
+		branchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+		branchOutput, err := branchCmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("failed to get current branch: %w", err)
+		}
+		branch := strings.TrimSpace(string(branchOutput))
+		remoteBranch = fmt.Sprintf("origin/%s", branch)
 	}
-	branch := strings.TrimSpace(string(branchOutput))
 
-	// Always try to get diff against origin first
-	remoteBranch := fmt.Sprintf("origin/%s", branch)
+	// Try to get diff against the specified/default branch
 	diffCmd := exec.Command("git", "diff", remoteBranch+"..HEAD", "--stat")
 	output, err := diffCmd.Output()
 	
@@ -640,7 +655,8 @@ func getChangesSinceLastPush() (string, error) {
 		output, err = diffCmd.Output()
 	}
 
-	return string(output), err
+	result := string(output)
+	return filterGitOutputByPatterns(result, excludePatterns), err
 }
 
 // Constants for diff analysis limits
@@ -651,17 +667,24 @@ const (
 )
 
 // getDetailedChanges gets actual code changes (not just stats) with size limits
-func getDetailedChanges() (string, bool, error) {
-	// Get current branch
-	branchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-	branchOutput, err := branchCmd.Output()
-	if err != nil {
-		return "", false, fmt.Errorf("failed to get current branch: %w", err)
+func getDetailedChanges(branchToCompare string, excludePatterns []string) (string, bool, error) {
+	var remoteBranch string
+	
+	if branchToCompare != "" {
+		// Use the specified branch for comparison
+		remoteBranch = branchToCompare
+	} else {
+		// Get current branch and use origin/{current-branch} as default
+		branchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+		branchOutput, err := branchCmd.Output()
+		if err != nil {
+			return "", false, fmt.Errorf("failed to get current branch: %w", err)
+		}
+		branch := strings.TrimSpace(string(branchOutput))
+		remoteBranch = fmt.Sprintf("origin/%s", branch)
 	}
-	branch := strings.TrimSpace(string(branchOutput))
 
-	// Try to get full diff content against origin
-	remoteBranch := fmt.Sprintf("origin/%s", branch)
+	// Try to get full diff content against the specified/default branch
 	cmd := exec.Command("git", "diff", remoteBranch+"..HEAD")
 	output, err := cmd.Output()
 	
@@ -682,7 +705,7 @@ func getDetailedChanges() (string, bool, error) {
 	}
 
 	// Apply size limits and filtering
-	filteredChanges, wasTruncated := filterAndLimitChanges(changes)
+	filteredChanges, wasTruncated := filterAndLimitChanges(changes, excludePatterns)
 	return filteredChanges, wasTruncated, nil
 }
 
@@ -698,7 +721,7 @@ func getCurrentRemoteBranch() (string, error) {
 }
 
 // filterAndLimitChanges applies intelligent filtering and size limits to git changes
-func filterAndLimitChanges(changes string) (string, bool) {
+func filterAndLimitChanges(changes string, excludePatterns []string) (string, bool) {
 	lines := strings.Split(changes, "\n")
 	var filteredLines []string
 	var currentFile string
@@ -733,8 +756,8 @@ func filterAndLimitChanges(changes string) (string, bool) {
 				currentFile = parts[3][2:] // Remove "b/" prefix
 			}
 
-			// Skip auto-generated files
-			if shouldSkipFile(currentFile) {
+			// Skip auto-generated files or user-defined exclusions
+			if shouldSkipFile(currentFile) || shouldExcludeFile(currentFile, excludePatterns) {
 				currentFile = "" // Mark to skip
 				continue
 			}
@@ -1404,4 +1427,72 @@ func renameADRFile(adrManager *adr.Manager, targetADR *adr.ADR, newTitle string)
 	targetADR.FilePath = newFilePath
 	
 	return nil
+}
+
+// shouldExcludeFile checks if a file matches any of the user-defined exclude patterns
+func shouldExcludeFile(filePath string, excludePatterns []string) bool {
+	if len(excludePatterns) == 0 {
+		return false
+	}
+	
+	for _, pattern := range excludePatterns {
+		if matched, _ := filepath.Match(pattern, filePath); matched {
+			return true
+		}
+		
+		// Also check if pattern matches basename
+		basename := filePath[strings.LastIndex(filePath, "/")+1:]
+		if matched, _ := filepath.Match(pattern, basename); matched {
+			return true
+		}
+		
+		// Check for substring matches (for simple patterns like "*.html")
+		if strings.HasPrefix(pattern, "*.") {
+			ext := pattern[1:] // Remove "*"
+			if strings.HasSuffix(filePath, ext) {
+				return true
+			}
+		}
+		
+		// Check for directory patterns
+		if strings.HasSuffix(pattern, "/") || strings.HasSuffix(pattern, "/*") {
+			dirPattern := strings.TrimSuffix(strings.TrimSuffix(pattern, "*"), "/")
+			if strings.Contains(filePath, dirPattern+"/") {
+				return true
+			}
+		}
+		
+		// Simple substring match for other cases
+		if strings.Contains(filePath, pattern) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// filterGitOutputByPatterns filters git stat output by excluding lines with matching files
+func filterGitOutputByPatterns(gitOutput string, excludePatterns []string) string {
+	if len(excludePatterns) == 0 {
+		return gitOutput
+	}
+	
+	lines := strings.Split(gitOutput, "\n")
+	var filteredLines []string
+	
+	for _, line := range lines {
+		// Extract filename from git stat line (format: " file.txt | 5 ++---")
+		if strings.Contains(line, " |") {
+			parts := strings.Fields(line)
+			if len(parts) > 0 {
+				filename := parts[0]
+				if shouldExcludeFile(filename, excludePatterns) {
+					continue // Skip this line
+				}
+			}
+		}
+		filteredLines = append(filteredLines, line)
+	}
+	
+	return strings.Join(filteredLines, "\n")
 }

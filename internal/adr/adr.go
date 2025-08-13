@@ -192,57 +192,27 @@ func (m *Manager) parseADRFile(filePath string, id int) (*ADR, error) {
 
 	contentStr := string(content)
 	
-	// Try to parse front matter first
-	if strings.HasPrefix(contentStr, "---\n") {
-		endIndex := strings.Index(contentStr[4:], "\n---\n")
-		if endIndex != -1 {
-			frontMatterStr := contentStr[4 : endIndex+4]
-			var frontMatter FrontMatter
-			if err := yaml.Unmarshal([]byte(frontMatterStr), &frontMatter); err == nil {
-				adr.ID = frontMatter.ID
-				adr.Title = frontMatter.Title
-				adr.Status = Status(frontMatter.Status)
-				if parsedDate, err := time.Parse("2006-01-02", frontMatter.Date); err == nil {
-					adr.Date = parsedDate
-				}
-				return adr, nil
-			}
-		}
+	// Parse front matter - all ADRs must have front matter format
+	if !strings.HasPrefix(contentStr, "---\n") {
+		return nil, fmt.Errorf("ADR file must contain YAML front matter starting with '---'")
 	}
 
-	// Fallback to legacy parsing for existing files without front matter
-	lines := strings.Split(contentStr, "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		
-		// Extract title from first heading
-		if strings.HasPrefix(trimmed, "# ") && adr.Title == "" {
-			adr.Title = strings.TrimPrefix(trimmed, "# ")
-			continue
-		}
+	endIndex := strings.Index(contentStr[4:], "\n---\n")
+	if endIndex == -1 {
+		return nil, fmt.Errorf("ADR file front matter must end with '---'")
+	}
 
-		// Extract status (various formats)
-		if strings.Contains(strings.ToLower(line), "status:") {
-			statusIdx := strings.Index(strings.ToLower(line), "status:")
-			if statusIdx != -1 {
-				statusText := strings.TrimSpace(line[statusIdx+7:])
-				adr.Status = Status(statusText)
-			}
-			continue
-		}
+	frontMatterStr := contentStr[4 : endIndex+4]
+	var frontMatter FrontMatter
+	if err := yaml.Unmarshal([]byte(frontMatterStr), &frontMatter); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML front matter: %w", err)
+	}
 
-		// Extract context for legacy files
-		if i < len(lines)-1 && strings.HasPrefix(trimmed, "## Context") {
-			j := i + 1
-			var contextLines []string
-			for j < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[j]), "##") {
-				if strings.TrimSpace(lines[j]) != "" {
-					contextLines = append(contextLines, lines[j])
-				}
-				j++
-			}
-			adr.Context = strings.Join(contextLines, "\n")
-		}
+	adr.ID = frontMatter.ID
+	adr.Title = frontMatter.Title
+	adr.Status = Status(frontMatter.Status)
+	if parsedDate, err := time.Parse("2006-01-02", frontMatter.Date); err == nil {
+		adr.Date = parsedDate
 	}
 
 	return adr, nil
